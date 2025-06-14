@@ -37,6 +37,7 @@ fmt.setCellPadding(7)  # Отступ внутри ячеек
 fmt.setCellSpacing(0)
 
 
+# Чистит полносью layout
 def clear_layout(layout):
     while layout.count():
         item = layout.takeAt(0)
@@ -48,6 +49,7 @@ def clear_layout(layout):
             clear_layout(item)
 
 
+# Миксин для реализации вопросов с очередностью
 class QuestionReplacementMixin:
     def handle_replacement_click(self, button):
         if button in self.replacement_order:
@@ -258,9 +260,12 @@ class QuestionEditor(QtWidgets.QWidget):
     @QtCore.pyqtSlot()
     def save_all_questions(self):
         with session_sync_factory() as session:
+            new_test = TestsOrm(
+                name_test="Новый тест", teacher="Какой-то преподаватель"
+            )
             for i in range(len(self.question_list)):
                 input_question = QuestionsInputStringOrm(
-                    test_id=1,
+                    test=new_test,
                     question=self.questions[i][0],
                     answers=self.questions[i][1],
                     tag=self.questions[i][2],
@@ -270,7 +275,6 @@ class QuestionEditor(QtWidgets.QWidget):
         self.comeback_startmenu()
 
     # Возвращение в главное меню
-    @QtCore.pyqtSlot()
     def comeback_startmenu(self):
         self.start_window = StartWindow()
         self.start_window.show()
@@ -320,8 +324,10 @@ class QuestionEditor(QtWidgets.QWidget):
 
 
 class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
-    def __init__(self, parent=None):
+    def __init__(self, id_test: int, parent=None):
         super().__init__(parent)
+
+        self.id_test = id_test
 
         self.true_answer: int = 0
         self.count_question: int = 0
@@ -387,8 +393,7 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
     def get_question(self):
         with session_sync_factory() as session:
             # Должен браться взависимости от выбранного теста
-            id_test = 1
-            query = select(TestsOrm).where(TestsOrm.id == id_test)
+            query = select(TestsOrm).where(TestsOrm.id == self.id_test)
             result = session.execute(query)
             choose_test = result.scalars().one_or_none()
             questions = set(
@@ -490,29 +495,70 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         self.close()
 
 
+# Стартовое окно
 class StartWindow(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Стартовое окно")
+        self.setWindowTitle("Центр тестирования")
+        self.resize(800, 600)
+        self.setMinimumSize(600, 400)
 
-        self.label = QtWidgets.QLabel("Стартовое окно")
-        self.label.setAlignment(QtCore.Qt.AlignHCenter)
+        self.init_ui()
 
-        self.btnStartTest = QtWidgets.QPushButton("&Начать тест")
-        self.btnStartTest.clicked.connect(self.open_test_window)
+    def init_ui(self):
+        # Основной макет
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(40, 40, 40, 40)
+        main_layout.setSpacing(30)
 
-        self.btnCreateTest = QtWidgets.QPushButton("&Создать тест")
-        self.btnCreateTest.clicked.connect(self.open_create_test_window)
+        # Заголовок
+        self.label = QtWidgets.QLabel("Добро пожаловать в Центр тестирования")
+        self.label.setAlignment(QtCore.Qt.AlignCenter)
 
-        self.vbox = QtWidgets.QVBoxLayout()
-        self.vbox.addWidget(self.label)
-        self.vbox.addWidget(self.btnStartTest)
-        self.vbox.addWidget(self.btnCreateTest)
-        self.setLayout(self.vbox)
+        # Список тестов
+        self.test_list = QtWidgets.QListWidget()
+        self.test_list.itemDoubleClicked.connect(self.confirm_test_selection)
 
-    def open_test_window(self):
-        self.qeustion_window = QuestionWindow()
-        # self.qeustion_window.showFullScreen()
+        # Кнопка создания теста
+        self.btn_create_test = QtWidgets.QPushButton("Создать новый тест")
+        self.btn_create_test.clicked.connect(self.open_create_test_window)
+
+        # Добавление виджетов
+        main_layout.addWidget(self.label)
+        main_layout.addWidget(QtWidgets.QLabel("Доступные тесты:"))
+        main_layout.addWidget(self.test_list, 1)
+        main_layout.addWidget(self.btn_create_test)
+
+        self.load_tests()
+
+    def load_tests(self):
+        self.test_list.clear()
+        self.test_items = {}
+
+        with session_sync_factory() as session:
+            tests = session.scalars(select(TestsOrm)).all()
+            for test in tests:
+                item = QtWidgets.QListWidgetItem(
+                    f"{test.name_test} — {test.teacher}"
+                )
+                item.setData(QtCore.Qt.UserRole, test.id)
+                self.test_list.addItem(item)
+
+    def confirm_test_selection(self, item):
+        test_id = item.data(QtCore.Qt.UserRole)
+        test_name = item.text()
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Подтверждение",
+            f"Вы действительно хотите начать тест:\n«{test_name}»?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.open_test_window(test_id)
+
+    def open_test_window(self, test_id):
+        self.qeustion_window = QuestionWindow(id_test=test_id)
         self.qeustion_window.show()
         self.close()
 
