@@ -108,6 +108,107 @@ class CustomTextEdit(QtWidgets.QTextEdit):
         return f'<img src="data:image/png;base64,{base64_data}" style="max-width:100%; width:300px; height:auto;" />'
 
 
+class QuestionEditorWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+
+        # Ввод текста вопроса
+        self.question_text = CustomTextEdit()
+        self.question_text.setPlaceholderText("Введите текст вопроса...")
+        self.question_text.setFixedHeight(500)
+        self.layout.addWidget(self.question_text)
+
+        # Выбор типа вопроса
+        self.type_selector = QtWidgets.QComboBox()
+        self.type_selector.addItems(
+            [
+                "Ввод строки",
+                "Один правильный ответ",
+                "Несколько правильных ответов",
+                "Упорядочивание",
+            ]
+        )
+        self.type_selector.currentIndexChanged.connect(
+            self.change_answer_widget
+        )
+
+        create_answer_for_question = QtWidgets.QHBoxLayout()
+        create_answer_for_question.addWidget(
+            QtWidgets.QLabel("Введите ответ:")
+        )
+        create_answer_for_question.addStretch()
+        create_answer_for_question.addWidget(QtWidgets.QLabel("Тип вопроса: "))
+        create_answer_for_question.addWidget(self.type_selector)
+        self.layout.addLayout(create_answer_for_question)
+
+        # Контейнер для ответа
+        self.answer_widget_container = QtWidgets.QStackedWidget()
+        self.layout.addWidget(self.answer_widget_container)
+
+        self.init_answer_widgets()
+
+    def init_answer_widgets(self):
+        # Ввод строки
+        self.input_string_widget = QtWidgets.QLineEdit()
+        self.answer_widget_container.addWidget(self.input_string_widget)
+
+        # Один правильный ответ (Radio buttons)
+        self.single_choice_widget = self._create_choices_widget(multiple=False)
+        self.answer_widget_container.addWidget(self.single_choice_widget)
+
+        # Несколько правильных ответов (Checkboxes)
+        self.multiple_choice_widget = self._create_choices_widget(
+            multiple=True
+        )
+        self.answer_widget_container.addWidget(self.multiple_choice_widget)
+
+        # Упорядочивание
+        self.ordering_widget = self._create_ordering_widget()
+        self.answer_widget_container.addWidget(self.ordering_widget)
+
+        self.answer_widget_container.setCurrentIndex(0)
+
+    def _create_choices_widget(self, multiple=False):
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        # 4 варианта по умолчанию
+        for i in range(4):
+            if multiple:
+                btn = QtWidgets.QCheckBox(f"Вариант {i + 1}")
+            else:
+                btn = QtWidgets.QRadioButton(f"Вариант {i + 1}")
+            layout.addWidget(btn)
+
+        return widget
+
+    def _create_ordering_widget(self):
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        self.order_list = QtWidgets.QListWidget()
+        self.order_list.setDragEnabled(True)
+        self.order_list.setAcceptDrops(True)
+        self.order_list.setDragDropMode(
+            QtWidgets.QAbstractItemView.InternalMove
+        )
+
+        for i in range(4):
+            self.order_list.addItem(f"Элемент {i + 1}")
+
+        layout.addWidget(
+            QtWidgets.QLabel("Перетащите элементы в правильном порядке:")
+        )
+        layout.addWidget(self.order_list)
+
+        return widget
+
+    def change_answer_widget(self, index):
+        self.answer_widget_container.setCurrentIndex(index)
+
+
 class QuestionEditor(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -116,8 +217,7 @@ class QuestionEditor(QtWidgets.QWidget):
         self.questions = []  # Список временных вопросов
         self.current_edit_index = None
 
-        self.question_text = CustomTextEdit()
-        self.answer_on_question = QtWidgets.QLineEdit()
+        self.answer_on_question = QuestionEditorWidget()
         self.tag_for_question = QtWidgets.QLineEdit()
         self.tag_for_question.setMaxLength(20)
         self.tag_for_question.setFixedWidth(150)
@@ -177,8 +277,6 @@ class QuestionEditor(QtWidgets.QWidget):
         left_layout = QtWidgets.QVBoxLayout()
         left_layout.addLayout(toolbar)
         left_layout.addLayout(title_question)
-        left_layout.addWidget(self.question_text)
-        left_layout.addWidget(QtWidgets.QLabel("Введите ответ:"))
         left_layout.addWidget(self.answer_on_question)
         left_layout.addLayout(layout_render_text)
         left_layout.addWidget(self.add_question_btn)
@@ -529,8 +627,6 @@ class StartWindow(QtWidgets.QWidget):
         main_layout.addWidget(self.test_list, 1)
         main_layout.addWidget(self.btn_create_test)
 
-        self.load_tests()
-
     def load_tests(self):
         self.test_list.clear()
         self.test_items = {}
@@ -677,13 +773,12 @@ async def insert_data_database():
 
 
 async def first_work_database(window):
-    window.btnStartTest.setEnabled(False)
     print("Загрузка данных")
     await setup_database()
     print("Добавление данных в таблицы")
     await insert_data_database()
     print("Работа с БД закончилась")
-    window.btnStartTest.setEnabled(True)
+    await window.load_tests()
 
 
 async def main():
