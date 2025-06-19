@@ -108,6 +108,41 @@ class CustomTextEdit(QtWidgets.QTextEdit):
         return f'<img src="data:image/png;base64,{base64_data}" style="max-width:100%; width:300px; height:auto;" />'
 
 
+class TestInfoDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Информация о тесте")
+
+        self.name_input = QtWidgets.QLineEdit()
+        self.teacher_input = QtWidgets.QLineEdit()
+
+        form = QtWidgets.QFormLayout()
+        form.addRow("Название теста:", self.name_input)
+        form.addRow("Имя преподавателя:", self.teacher_input)
+
+        btn_ok = QtWidgets.QPushButton("OK")
+        btn_cancel = QtWidgets.QPushButton("Отмена")
+
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.addLayout(form)
+        main_layout.addLayout(btn_layout)
+        self.setLayout(main_layout)
+
+    def get_data(self):
+        return (
+            self.name_input.text().strip(),
+            self.teacher_input.text().strip(),
+        )
+
+
 # Стартовое окно
 class StartWindow(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -185,6 +220,9 @@ class QuestionEditorWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.font_for_answer = QFont()
+        self.font_for_answer.setPointSize(14)
+
         self.layout = QtWidgets.QVBoxLayout(self)
 
         # Ввод текста вопроса
@@ -198,8 +236,7 @@ class QuestionEditorWidget(QtWidgets.QWidget):
         self.type_selector.addItems(
             [
                 "Ввод строки",
-                "Один правильный ответ",
-                "Несколько правильных ответов",
+                "Выбор правильн(ого/ых) ответов",
                 "Упорядочивание",
             ]
         )
@@ -226,37 +263,117 @@ class QuestionEditorWidget(QtWidgets.QWidget):
         # Ввод строки
         self.input_string_widget = QtWidgets.QLineEdit()
         self.input_string_widget.setFixedHeight(30)
-        self.input_string_widget.setFont(QtGui.QFont("", 16))
+        self.input_string_widget.setFont(self.font_for_answer)
         self.answer_widget_container.addWidget(self.input_string_widget)
 
-        # Один правильный ответ (Radio buttons)
-        self.single_choice_widget = self._create_choices_widget(multiple=False)
-        self.answer_widget_container.addWidget(self.single_choice_widget)
-
         # Несколько правильных ответов (Checkboxes)
-        self.multiple_choice_widget = self._create_choices_widget(
-            multiple=True
-        )
+        self.multiple_choice_widget = self._create_choices_widget()
         self.answer_widget_container.addWidget(self.multiple_choice_widget)
 
         # Упорядочивание
         self.ordering_widget = self._create_ordering_widget()
         self.answer_widget_container.addWidget(self.ordering_widget)
-
         self.answer_widget_container.setCurrentIndex(0)
 
-    def _create_choices_widget(self, multiple=False):
+    def _create_choices_widget(self):
         widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        main_layout = QtWidgets.QHBoxLayout(widget)
 
-        for i in range(1):
-            if multiple:
-                btn = QtWidgets.QCheckBox(f"Вариант {i + 1}")
-            else:
-                btn = QtWidgets.QRadioButton(f"Вариант {i + 1}")
-            layout.addWidget(btn)
+        self.right_answer_layout = QtWidgets.QVBoxLayout()
+        self.right_answer_layout.addWidget(
+            QtWidgets.QLabel("Правильные ответы: ")
+        )
+
+        first_right = QtWidgets.QLineEdit()
+        first_right.setFont(self.font_for_answer)
+        self.right_answer_layout.addWidget(first_right)
+
+        self.btn_add_right = QtWidgets.QPushButton(
+            "Добавить правильный вариант ответа"
+        )
+        self.btn_delete_right = QtWidgets.QPushButton(
+            "Удалить правильный вариант ответа"
+        )
+        self.right_answer_layout.addWidget(self.btn_add_right)
+        self.right_answer_layout.addWidget(self.btn_delete_right)
+        self.right_answer_layout.addStretch()
+
+        self.btn_add_right.clicked.connect(
+            lambda: self._add_line_edit_with_font(self.right_answer_layout)
+        )
+        self.btn_delete_right.clicked.connect(
+            lambda: self._delete_line_edit(self.right_answer_layout)
+        )
+
+        self.wrong_answer_layout = QtWidgets.QVBoxLayout()
+        self.wrong_answer_layout.addWidget(
+            QtWidgets.QLabel("Неправильные ответы: ")
+        )
+
+        self.btn_add_wrong = QtWidgets.QPushButton(
+            "Добавить неправильный вариант ответа"
+        )
+        self.btn_delete_wrong = QtWidgets.QPushButton(
+            "Удалить неправильный вариант ответа"
+        )
+        self.wrong_answer_layout.addWidget(self.btn_add_wrong)
+        self.wrong_answer_layout.addWidget(self.btn_delete_wrong)
+        self.wrong_answer_layout.addStretch()
+
+        self.btn_add_wrong.clicked.connect(
+            lambda: self._add_line_edit_with_font(self.wrong_answer_layout)
+        )
+        self.btn_delete_wrong.clicked.connect(
+            lambda: self._delete_line_edit(self.wrong_answer_layout)
+        )
+
+        main_layout.addLayout(self.right_answer_layout)
+        main_layout.addLayout(self.wrong_answer_layout)
+
+        # Начальное состояние
+        self._update_delete_buttons()
 
         return widget
+
+    # Реализация добавления полей для ввода в layout
+    def _add_line_edit_with_font(self, layout, text=None):
+        line_edit = QtWidgets.QLineEdit(text)
+        line_edit.setFont(self.font_for_answer)
+        layout.insertWidget(layout.count() - 3, line_edit)
+        self._update_delete_buttons()
+
+    # Реализация удаления полей для ввода в layout
+    def _delete_line_edit(self, layout):
+        count = layout.count()
+        for i in range(count - 4, 0, -1):  # Пропускаем label и кнопки
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if isinstance(widget, QtWidgets.QLineEdit):
+                layout.takeAt(i)
+                widget.deleteLater()
+                break
+        self._update_delete_buttons()
+
+    def _update_delete_buttons(self):
+        # Проверяем количество QLineEdit в правом layout
+        right_count = sum(
+            isinstance(
+                self.right_answer_layout.itemAt(i).widget(),
+                QtWidgets.QLineEdit,
+            )
+            for i in range(self.right_answer_layout.count())
+        )
+        self.btn_delete_right.setEnabled(right_count > 1)
+
+        # Проверяем количество QLineEdit в левом layout
+        wrong_count = sum(
+            isinstance(
+                self.wrong_answer_layout.itemAt(i).widget(),
+                QtWidgets.QLineEdit,
+            )
+            for i in range(self.wrong_answer_layout.count())
+        )
+        self.btn_delete_wrong.setEnabled(wrong_count > 0)
 
     def _create_ordering_widget(self):
         widget = QtWidgets.QWidget()
@@ -295,11 +412,6 @@ class QuestionEditor(QtWidgets.QWidget):
         self.tag_for_question = QtWidgets.QLineEdit()
         self.tag_for_question.setMaxLength(20)
         self.tag_for_question.setFixedWidth(150)
-        print(
-            ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
-            self.tag_for_question.size(),
-        )
-
         self.size_box = QtWidgets.QComboBox()
         self.size_box.addItems([str(size) for size in range(8, 30, 2)])
         self.size_box.currentIndexChanged.connect(self.set_font_size)
@@ -405,7 +517,32 @@ class QuestionEditor(QtWidgets.QWidget):
     @QtCore.pyqtSlot()
     def save_question_temp(self):
         html = self.answer_on_question.question_text.toHtml()
-        answer = self.answer_on_question.input_string_widget.text()
+        type_answer = self.answer_on_question.type_selector.currentText()
+        answer = None
+        if type_answer == "Ввод строки":
+            answer = self.answer_on_question.input_string_widget.text()
+        elif type_answer == "Выбор правильн(ого/ых) ответов":
+            answer = [[], []]
+            for i in range(
+                1, self.answer_on_question.right_answer_layout.count() - 3
+            ):
+                answer[0].append(
+                    self.answer_on_question.right_answer_layout.itemAt(i)
+                    .widget()
+                    .text()
+                )
+            if self.answer_on_question.wrong_answer_layout.count() > 4:
+                for i in range(
+                    1, self.answer_on_question.wrong_answer_layout.count() - 3
+                ):
+                    answer[1].append(
+                        self.answer_on_question.wrong_answer_layout.itemAt(i)
+                        .widget()
+                        .text()
+                    )
+            print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", answer)
+        elif type_answer == "Упорядочивание":
+            self.answer_on_question.type_selector.setCurrentIndex(2)
         tag = self.tag_for_question.text()
 
         item_text = f"{tag or 'Без тега'} — {html[:-18][435:500]}..."
@@ -413,41 +550,110 @@ class QuestionEditor(QtWidgets.QWidget):
         if self.current_edit_index is not None:
             self.questions[self.current_edit_index] = (
                 html,
+                type_answer,
                 answer,
                 tag or None,
             )
             self.question_list.item(self.current_edit_index).setText(item_text)
             self.current_edit_index = None
         else:
-            self.questions.append((html, answer, tag or None))
+            self.questions.append((html, type_answer, answer, tag or None))
             self.question_list.addItem(item_text)
 
         self.clear_question_fields()
 
     def load_selected_question(self, item):
+        self.clear_question_fields()
+
         index = self.question_list.row(item)
-        html, answer, tag = self.questions[index]
+
+        html, type_answer, answer, tag = self.questions[index]
 
         self.answer_on_question.question_text.setHtml(html)
-        self.answer_on_question.input_string_widget.setText(answer)
+
+        if type_answer == "Ввод строки":
+            self.answer_on_question.type_selector.setCurrentIndex(0)
+            self.answer_on_question.input_string_widget.setText(answer)
+
+        elif type_answer == "Выбор правильн(ого/ых) ответов":
+            self.answer_on_question.type_selector.setCurrentIndex(1)
+            for i in range(len(answer[0])):
+                if i == 0:
+                    self.answer_on_question.right_answer_layout.itemAt(
+                        1
+                    ).widget().setText(answer[0][0])
+                    continue
+                self.answer_on_question._add_line_edit_with_font(
+                    self.answer_on_question.right_answer_layout, answer[0][i]
+                )
+            for i in range(len(answer[1])):
+                self.answer_on_question._add_line_edit_with_font(
+                    self.answer_on_question.wrong_answer_layout, answer[1][i]
+                )
+
+        elif type_answer == "Упорядочивание":
+            self.answer_on_question.type_selector.setCurrentIndex(2)
+
         self.tag_for_question.setText(tag)
         self.current_edit_index = index
 
     @QtCore.pyqtSlot()
     def save_all_questions(self):
+        dialog = TestInfoDialog(self)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        name_test, teacher_name = dialog.get_data()
+
+        if not name_test or not teacher_name:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Название теста и имя преподавателя не могут быть пустыми.",
+            )
+            return
+
         with session_sync_factory() as session:
             new_test = TestsOrm(
-                name_test="Новый тест", teacher="Какой-то преподаватель"
+                name_test=name_test,
+                teacher=teacher_name,
             )
+
             for i in range(len(self.question_list)):
-                input_question = QuestionsInputStringOrm(
-                    test=new_test,
-                    question=self.questions[i][0],
-                    answers=self.questions[i][1],
-                    tag=self.questions[i][2],
-                )
-                session.add(input_question)
+                q_html, q_type, q_answer, q_tag = self.questions[i]
+
+                if q_type == "Ввод строки":
+                    input_question = QuestionsInputStringOrm(
+                        test=new_test,
+                        question=q_html,
+                        answers=q_answer,
+                        tag=q_tag,
+                    )
+                    session.add(input_question)
+
+                elif q_type == "Выбор правильн(ого/ых) ответов":
+                    checkbox_question = QuestionsCheckBoxOrm(
+                        test=new_test,
+                        question=q_html,
+                        answers=[
+                            *[
+                                AnswersCheckBoxOrm(text=text, is_correct=True)
+                                for text in q_answer[0]
+                            ],
+                            *[
+                                AnswersCheckBoxOrm(text=text, is_correct=False)
+                                for text in q_answer[1]
+                            ],
+                        ],
+                        tag=q_tag,
+                    )
+                    session.add(checkbox_question)
+
+                elif q_type == "Упорядочивание":
+                    pass  # реализация позже
+
             session.commit()
+
         self.comeback_startmenu()
 
     # Возвращение в главное меню
@@ -498,6 +704,17 @@ class QuestionEditor(QtWidgets.QWidget):
     def clear_question_fields(self):
         self.answer_on_question.question_text.clear()
         self.answer_on_question.input_string_widget.clear()
+        self.answer_on_question.answer_widget_container.setCurrentIndex(0)
+        self.answer_on_question.type_selector.setCurrentText("Ввод строки")
+        while self.answer_on_question.btn_delete_right.isEnabled():
+            self.answer_on_question._delete_line_edit(
+                self.answer_on_question.right_answer_layout
+            )
+        self.answer_on_question.right_answer_layout.itemAt(1).widget().clear()
+        while self.answer_on_question.btn_delete_wrong.isEnabled():
+            self.answer_on_question._delete_line_edit(
+                self.answer_on_question.wrong_answer_layout
+            )
 
 
 class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
