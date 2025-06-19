@@ -495,7 +495,7 @@ class QuestionEditor(QtWidgets.QWidget):
         if not ok2:
             return
 
-        cursor = self.question_text.textCursor()
+        cursor = self.answer_on_question.question_text.textCursor()
         cursor.insertTable(rows, cols, fmt)
 
     @QtCore.pyqtSlot()
@@ -510,8 +510,10 @@ class QuestionEditor(QtWidgets.QWidget):
             image = QImage(path)
             if image.isNull():
                 return
-        cursor = self.question_text.textCursor()
-        html_img = self.question_text._image_to_base64_html(image)
+        cursor = self.answer_on_question.question_text.textCursor()
+        html_img = self.answer_on_question.question_text._image_to_base64_html(
+            image
+        )
         cursor.insertHtml(html_img)
 
     @QtCore.pyqtSlot()
