@@ -275,6 +275,7 @@ class QuestionEditorWidget(QtWidgets.QWidget):
         self.answer_widget_container.addWidget(self.ordering_widget)
         self.answer_widget_container.setCurrentIndex(0)
 
+    # Виджет для создания ответа с выбор(ом/ами)
     def _create_choices_widget(self):
         widget = QtWidgets.QWidget()
         main_layout = QtWidgets.QHBoxLayout(widget)
@@ -330,9 +331,6 @@ class QuestionEditorWidget(QtWidgets.QWidget):
         main_layout.addLayout(self.right_answer_layout)
         main_layout.addLayout(self.wrong_answer_layout)
 
-        # Начальное состояние
-        self._update_delete_buttons()
-
         return widget
 
     # Реализация добавления полей для ввода в layout
@@ -355,49 +353,80 @@ class QuestionEditorWidget(QtWidgets.QWidget):
         self._update_delete_buttons()
 
     def _update_delete_buttons(self):
-        # Проверяем количество QLineEdit в правом layout
-        right_count = sum(
-            isinstance(
-                self.right_answer_layout.itemAt(i).widget(),
-                QtWidgets.QLineEdit,
-            )
-            for i in range(self.right_answer_layout.count())
-        )
-        self.btn_delete_right.setEnabled(right_count > 1)
 
-        # Проверяем количество QLineEdit в левом layout
-        wrong_count = sum(
-            isinstance(
-                self.wrong_answer_layout.itemAt(i).widget(),
-                QtWidgets.QLineEdit,
+        # Проверка для активности кнопки удаления в выборе ответов(index==1)
+        if self.type_selector.currentIndex() == 1:
+            # Проверяем количество QLineEdit в неправильных ответах layout
+            wrong_count = sum(
+                isinstance(
+                    self.wrong_answer_layout.itemAt(i).widget(),
+                    QtWidgets.QLineEdit,
+                )
+                for i in range(self.wrong_answer_layout.count())
             )
-            for i in range(self.wrong_answer_layout.count())
-        )
-        self.btn_delete_wrong.setEnabled(wrong_count > 0)
+            self.btn_delete_wrong.setEnabled(wrong_count > 0)
 
+            # Проверяем количество QLineEdit в правильных ответах layout
+            right_count = sum(
+                isinstance(
+                    self.right_answer_layout.itemAt(i).widget(),
+                    QtWidgets.QLineEdit,
+                )
+                for i in range(self.right_answer_layout.count())
+            )
+            self.btn_delete_right.setEnabled(right_count > 1)
+
+        # Проверка для активности кнопки удаления в упорядочивание(index==2)
+        if self.type_selector.currentIndex() == 2:
+            # Проверяем количество QLineEdit в правильных ответах layout
+            main_count = sum(
+                isinstance(
+                    self.main_layout.itemAt(i).widget(),
+                    QtWidgets.QLineEdit,
+                )
+                for i in range(self.main_layout.count())
+            )
+            self.btn_delete_line_answer.setEnabled(main_count > 2)
+
+    # Виджет для создания ответа с упорядочиванием
     def _create_ordering_widget(self):
         widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
+        self.main_layout = QtWidgets.QVBoxLayout(widget)
 
-        self.order_list = QtWidgets.QListWidget()
-        self.order_list.setDragEnabled(True)
-        self.order_list.setAcceptDrops(True)
-        self.order_list.setDragDropMode(
-            QtWidgets.QAbstractItemView.InternalMove
+        self.main_layout.addWidget(
+            QtWidgets.QLabel("Введите ответ в правильном порядке: ")
         )
 
-        for i in range(4):
-            self.order_list.addItem(f"Элемент {i + 1}")
+        first_line_answer = QtWidgets.QLineEdit()
+        first_line_answer.setFont(self.font_for_answer)
+        self.main_layout.addWidget(first_line_answer)
+        second_line_answer = QtWidgets.QLineEdit()
+        second_line_answer.setFont(self.font_for_answer)
+        self.main_layout.addWidget(second_line_answer)
 
-        layout.addWidget(
-            QtWidgets.QLabel("Перетащите элементы в правильном порядке:")
+        self.btn_add_line_answer = QtWidgets.QPushButton(
+            "Добавить правильный вариант ответа"
         )
-        layout.addWidget(self.order_list)
+        self.btn_delete_line_answer = QtWidgets.QPushButton(
+            "Удалить правильный вариант ответа"
+        )
+        self.main_layout.addWidget(self.btn_add_line_answer)
+        self.main_layout.addWidget(self.btn_delete_line_answer)
+        self.main_layout.addStretch()
+
+        self.btn_add_line_answer.clicked.connect(
+            lambda: self._add_line_edit_with_font(self.main_layout)
+        )
+        self.btn_delete_line_answer.clicked.connect(
+            lambda: self._delete_line_edit(self.main_layout)
+        )
 
         return widget
 
     def change_answer_widget(self, index):
         self.answer_widget_container.setCurrentIndex(index)
+        # Деактивация кнопок удаления при создания первоначального шаблона вопроса
+        self._update_delete_buttons()
 
 
 class QuestionEditor(QtWidgets.QWidget):
@@ -516,35 +545,43 @@ class QuestionEditor(QtWidgets.QWidget):
         )
         cursor.insertHtml(html_img)
 
+    # Сохранение шаблона вопроса в память
     @QtCore.pyqtSlot()
     def save_question_temp(self):
         html = self.answer_on_question.question_text.toHtml()
         type_answer = self.answer_on_question.type_selector.currentText()
         answer = None
+
         if type_answer == "Ввод строки":
             answer = self.answer_on_question.input_string_widget.text()
+
         elif type_answer == "Выбор правильн(ого/ых) ответов":
             answer = [[], []]
             for i in range(
                 1, self.answer_on_question.right_answer_layout.count() - 3
             ):
-                answer[0].append(
-                    self.answer_on_question.right_answer_layout.itemAt(i)
-                    .widget()
-                    .text()
-                )
-            if self.answer_on_question.wrong_answer_layout.count() > 4:
-                for i in range(
-                    1, self.answer_on_question.wrong_answer_layout.count() - 3
-                ):
-                    answer[1].append(
-                        self.answer_on_question.wrong_answer_layout.itemAt(i)
-                        .widget()
-                        .text()
-                    )
-            print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", answer)
+                widget = self.answer_on_question.right_answer_layout.itemAt(
+                    i
+                ).widget()
+                if isinstance(widget, QtWidgets.QLineEdit):
+                    answer[0].append(widget.text())
+
+            for i in range(
+                1, self.answer_on_question.wrong_answer_layout.count() - 3
+            ):
+                widget = self.answer_on_question.wrong_answer_layout.itemAt(
+                    i
+                ).widget()
+                if isinstance(widget, QtWidgets.QLineEdit):
+                    answer[1].append(widget.text())
+
         elif type_answer == "Упорядочивание":
-            self.answer_on_question.type_selector.setCurrentIndex(2)
+            answer = []
+            for i in range(1, self.answer_on_question.main_layout.count() - 3):
+                widget = self.answer_on_question.main_layout.itemAt(i).widget()
+                if isinstance(widget, QtWidgets.QLineEdit):
+                    answer.append(widget.text())
+
         tag = self.tag_for_question.text()
 
         item_text = f"{tag or 'Без тега'} — {html[:-18][435:500]}..."
@@ -564,6 +601,7 @@ class QuestionEditor(QtWidgets.QWidget):
 
         self.clear_question_fields()
 
+    # Загрузка из памяти сохраненного вопроса
     def load_selected_question(self, item):
         self.clear_question_fields()
 
@@ -595,10 +633,20 @@ class QuestionEditor(QtWidgets.QWidget):
 
         elif type_answer == "Упорядочивание":
             self.answer_on_question.type_selector.setCurrentIndex(2)
+            for i in range(len(answer)):
+                if i in (0, 1):
+                    self.answer_on_question.main_layout.itemAt(
+                        i + 1
+                    ).widget().setText(answer[i])
+                    continue
+                self.answer_on_question._add_line_edit_with_font(
+                    self.answer_on_question.main_layout, answer[i]
+                )
 
         self.tag_for_question.setText(tag)
         self.current_edit_index = index
 
+    # Сохранение вопросов
     @QtCore.pyqtSlot()
     def save_all_questions(self):
         dialog = TestInfoDialog(self)
@@ -652,7 +700,18 @@ class QuestionEditor(QtWidgets.QWidget):
                     session.add(checkbox_question)
 
                 elif q_type == "Упорядочивание":
-                    pass  # реализация позже
+                    order_question = QuestionsReplacementOrm(
+                        test=new_test,
+                        question=q_html,
+                        answers=[
+                            AnswersReplacementOrm(
+                                text=q_answer[number_answer],
+                                number_in_answer=number_answer + 1,
+                            )
+                            for number_answer in range(len(q_answer))
+                        ],
+                    )
+                    session.add(order_question)
 
             session.commit()
 
@@ -703,20 +762,63 @@ class QuestionEditor(QtWidgets.QWidget):
         cursor.mergeCharFormat(fmt)  # Применить формат к выделенному тексту
         self.answer_on_question.question_text.setTextCursor(cursor)
 
+    # Очистка полей после сохранения вопроса
     def clear_question_fields(self):
         self.answer_on_question.question_text.clear()
         self.answer_on_question.input_string_widget.clear()
         self.answer_on_question.answer_widget_container.setCurrentIndex(0)
         self.answer_on_question.type_selector.setCurrentText("Ввод строки")
-        while self.answer_on_question.btn_delete_right.isEnabled():
-            self.answer_on_question._delete_line_edit(
-                self.answer_on_question.right_answer_layout
-            )
-        self.answer_on_question.right_answer_layout.itemAt(1).widget().clear()
-        while self.answer_on_question.btn_delete_wrong.isEnabled():
-            self.answer_on_question._delete_line_edit(
-                self.answer_on_question.wrong_answer_layout
-            )
+
+        # очистка правильных ответов (оставляем только первый lineedit)
+        for i in reversed(
+            range(2, self.answer_on_question.right_answer_layout.count() - 3)
+        ):
+            widget = self.answer_on_question.right_answer_layout.itemAt(
+                i
+            ).widget()
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.deleteLater()
+                self.answer_on_question.right_answer_layout.removeWidget(
+                    widget
+                )
+
+        # очистка неправильных ответов
+        for i in reversed(
+            range(1, self.answer_on_question.wrong_answer_layout.count() - 3)
+        ):
+            widget = self.answer_on_question.wrong_answer_layout.itemAt(
+                i
+            ).widget()
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.deleteLater()
+                self.answer_on_question.wrong_answer_layout.removeWidget(
+                    widget
+                )
+
+        # очистка полей с упорядочиванием
+        for i in reversed(
+            range(3, self.answer_on_question.main_layout.count() - 3)
+        ):
+            widget = self.answer_on_question.main_layout.itemAt(i).widget()
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.deleteLater()
+                self.answer_on_question.main_layout.removeWidget(widget)
+
+        # очистка статичных полей в упорядочивании и выборе ответа
+        first_right = self.answer_on_question.right_answer_layout.itemAt(
+            1
+        ).widget()
+        first_str = self.answer_on_question.main_layout.itemAt(1).widget()
+        second_str = self.answer_on_question.main_layout.itemAt(2).widget()
+        if isinstance(first_right, QtWidgets.QLineEdit):
+            first_right.clear()
+        if isinstance(first_str, QtWidgets.QLineEdit):
+            first_str.clear()
+        if isinstance(second_str, QtWidgets.QLineEdit):
+            second_str.clear()
+
+        # после очистки обновляем состояние кнопок
+        self.answer_on_question._update_delete_buttons()
 
 
 class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
