@@ -3,6 +3,7 @@ import base64
 import os
 import re
 import sys
+from random import sample
 
 from database import async_engine, sync_engine
 from models import (
@@ -20,7 +21,7 @@ from PyQt5.QtWidgets import QFileDialog
 from qasync import QEventLoop
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 # Установка пути к плагинам PyQt5 (если нужно)
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(
@@ -109,31 +110,52 @@ class CustomTextEdit(QtWidgets.QTextEdit):
 
 
 # Реализация боковой панели со списков вопросов при прохождении теста
-class QuestionGrid(QtWidgets.QWidget):
+class QuestionGrid(QtWidgets.QFrame):  # QFrame вместо QWidget
     def __init__(self, total_questions=12, cols=3):
         super().__init__()
 
-        self.layout = QtWidgets.QGridLayout()
-        self.setLayout(self.layout)
+        # --- Оформление рамки ---
+        self.setFrameShape(QtWidgets.QFrame.Box)
+        self.setFrameShadow(QtWidgets.QFrame.Plain)
+        self.setLineWidth(1)  # толщина рамки
+        self.setStyleSheet("QFrame { border: 1px solid gray; }")
 
+        # --- Основной вертикальный layout ---
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
+
+        # Заголовок
+        title = QtWidgets.QLabel("Вопросы")
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        title.setStyleSheet("font-weight: bold;")
+        main_layout.addWidget(title)
+
+        # Сетка кнопок
+        self.grid = QtWidgets.QGridLayout()
+        self.grid.setSpacing(5)
         self.buttons = []
 
         for i in range(total_questions):
             row = i // cols
             col = i % cols
             btn = QtWidgets.QPushButton(str(i + 1))
-            btn.setFixedSize(40, 40)  # маленькая кнопка
+            btn.setFixedSize(40, 40)
             btn.setStyleSheet(
                 "background-color: lightgreen; border-radius: 5px;"
             )
-            btn.clicked.connect(self.handle_click)
-            self.layout.addWidget(btn, row, col)
+            self.grid.addWidget(btn, row, col)
             self.buttons.append(btn)
 
-    def handle_click(self):
-        btn = self.sender()
-        QtWidgets.QMessageBox.information(
-            self, "Вопрос", f"Вы выбрали вопрос {btn.text()}"
+        # Прижимаем кнопки вверх
+        self.grid.setRowStretch((total_questions // cols) + 1, 1)
+
+        main_layout.addLayout(self.grid)
+        self.setLayout(main_layout)
+
+        # Размер панели
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding
         )
 
     def set_button_color(self, index, color):
@@ -882,96 +904,125 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
     ):
         super().__init__(parent)
 
-        self.last_window = start_window
-
         self.id_test = id_test
+        self.last_window = start_window
 
         self.true_answer: int = 0
         self.count_question: int = 0
+        self.current_index: int = 0
 
         self.setWindowTitle("Прохождение теста")
         self.resize(2000, 1000)
 
         main_layout = QtWidgets.QVBoxLayout()
-        main_layout.addWidget(QtWidgets.QLabel(f"Тест: {test_name}"))
+        header = QtWidgets.QLabel(f"Тест: {test_name}")
+        header.setStyleSheet("font-size: 16pt;")
+        main_layout.addWidget(header)
+
+        # Загружаем список вопросов (а не генератор!)
+        self.questions = self.get_questions()
+        self.limit = len(self.questions)
+
         down_main_layout = QtWidgets.QHBoxLayout()
-        self.question_grid = QuestionGrid(total_questions=15, cols=3)
+        self.question_grid = QuestionGrid(total_questions=self.limit, cols=3)
         down_main_layout.addWidget(self.question_grid)
-        self.text_edit = QtWidgets.QTextEdit()
-        down_main_layout.addWidget(self.text_edit)
-        main_layout.addLayout(down_main_layout)
 
-        self.questions = self.get_question()
+        # Даем grid знать про главное окно
+        for i, btn in enumerate(self.question_grid.buttons):
+            btn.clicked.connect(lambda _, idx=i: self.load_question(idx))
 
-        self.current_question = next(self.questions)
-
-        self.label_question = QtWidgets.QLabel(
-            self.current_question["question"]
-        )
+        # Правая часть
+        self.right_layout = QtWidgets.QVBoxLayout()
+        self.label_question = QtWidgets.QLabel()
         self.label_question.setAlignment(
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop
         )
         self.label_question.setWordWrap(True)
-        main_layout.addWidget(self.label_question)
+        self.right_layout.addWidget(self.label_question)
 
         self.answer = QtWidgets.QVBoxLayout()
-        self.add_widgets_answer()
-        main_layout.addLayout(self.answer)
+        self.right_layout.addLayout(self.answer)
 
-        self.btnNext = QtWidgets.QPushButton("&Следуюищйй вопрос")
+        self.btnNext = QtWidgets.QPushButton("&Следующий вопрос")
         self.btnNext.clicked.connect(self.next_question)
-        main_layout.addWidget(self.btnNext)
+        self.right_layout.addWidget(self.btnNext)
 
+        down_main_layout.addLayout(self.right_layout, stretch=1)
+        main_layout.addLayout(down_main_layout)
         self.setLayout(main_layout)
+
+        # Загружаем первый вопрос
+        if self.questions:
+            self.load_question(0)
 
     # Загрузка следующего вопроса при прохождении теста
     @QtCore.pyqtSlot()
     def next_question(self):
-        # Проверка на правильность ответа
         if self.check_answer():
             self.true_answer += 1
-        try:
-            # Получение следующего вопроса
-            self.current_question = next(self.questions)
-        except StopIteration:
+
+        if self.current_index + 1 >= len(self.questions):
             self.label_question.setText(
                 "Вопросы закончились, ваш результат "
-                f"{round(self.true_answer / self.count_question * 100)} %"
+                f"{round(self.true_answer / len(self.questions) * 100)} %"
             )
             clear_layout(self.answer)
             self.btnNext.clicked.disconnect(self.next_question)
             self.btnNext.setText("Вернуться в главное меню")
             self.btnNext.clicked.connect(self.comeback_startmenu)
-            return
-
-        # Обновление текста вопроса
-        self.label_question.setText(self.current_question["question"])
-
-        # Очистка старых чекбоксов
-        clear_layout(self.answer)
-
-        # Добавление новых ответов
-        self.add_widgets_answer()
+        else:
+            self.load_question(self.current_index + 1)
 
     # Генератор с запросом к БД с получением данных о вопросе
-    def get_question(self):
+    def get_questions(self):
         with session_sync_factory() as session:
-            # Должен браться взависимости от выбранного теста
-            query = select(TestsOrm).where(TestsOrm.id == self.id_test)
-            result = session.execute(query)
-            choose_test = result.scalars().one_or_none()
-            questions = set(
-                choose_test.questions_check_box
-                + choose_test.questions_replacement
-                + choose_test.questions_input_string
+            query = (
+                select(TestsOrm)
+                .options(
+                    selectinload(TestsOrm.questions_check_box),
+                    selectinload(TestsOrm.questions_replacement),
+                    selectinload(TestsOrm.questions_input_string),
+                )
+                .where(TestsOrm.id == self.id_test)
             )
-            self.count_question = len(questions)
-            for i in questions:
-                yield {
+            result = session.execute(query)
+            test = result.scalars().one_or_none()
+            if not test:
+                return []
+
+            all_questions = (
+                test.questions_check_box
+                + test.questions_replacement
+                + test.questions_input_string
+            )
+            chosen_questions = sample(
+                all_questions, min(len(all_questions), test.col_view_questions)
+            )
+            return [
+                {
                     "question": i.question,
                     "answer": i.answers,
                     "type": i.__tablename__,
                 }
+                for i in chosen_questions
+            ]
+
+    def load_question(self, index: int):
+        """Загружает вопрос по индексу"""
+        if index < 0 or index >= len(self.questions):
+            return
+
+        self.current_index = index
+        self.current_question = self.questions[index]
+
+        # Обновляем текст
+        self.label_question.setText(self.current_question["question"])
+
+        # Чистим старые ответы
+        clear_layout(self.answer)
+
+        # Добавляем новые
+        self.add_widgets_answer()
 
     # Загрузка в окно с вопросом подходящий под вопрос виджет
     def add_widgets_answer(self):
