@@ -36,6 +36,7 @@ class TestsOrm(Base):
     id: Mapped[idpk]
     name_test: Mapped[str] = mapped_column(unique=True)
     teacher: Mapped[str]
+    col_view_questions: Mapped[int]
 
     questions_check_box: Mapped[Optional[list["QuestionsCheckBoxOrm"]]] = (
         relationship(back_populates="test")

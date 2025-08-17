@@ -108,6 +108,42 @@ class CustomTextEdit(QtWidgets.QTextEdit):
         return f'<img src="data:image/png;base64,{base64_data}" style="max-width:100%; width:300px; height:auto;" />'
 
 
+# Реализация боковой панели со списков вопросов при прохождении теста
+class QuestionGrid(QtWidgets.QWidget):
+    def __init__(self, total_questions=12, cols=3):
+        super().__init__()
+
+        self.layout = QtWidgets.QGridLayout()
+        self.setLayout(self.layout)
+
+        self.buttons = []
+
+        for i in range(total_questions):
+            row = i // cols
+            col = i % cols
+            btn = QtWidgets.QPushButton(str(i + 1))
+            btn.setFixedSize(40, 40)  # маленькая кнопка
+            btn.setStyleSheet(
+                "background-color: lightgreen; border-radius: 5px;"
+            )
+            btn.clicked.connect(self.handle_click)
+            self.layout.addWidget(btn, row, col)
+            self.buttons.append(btn)
+
+    def handle_click(self):
+        btn = self.sender()
+        QtWidgets.QMessageBox.information(
+            self, "Вопрос", f"Вы выбрали вопрос {btn.text()}"
+        )
+
+    def set_button_color(self, index, color):
+        """Изменить цвет кнопки (например, при ответе)"""
+        if 0 <= index < len(self.buttons):
+            self.buttons[index].setStyleSheet(
+                f"background-color: {color}; border-radius: 5px;"
+            )
+
+
 class TestInfoDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -115,10 +151,14 @@ class TestInfoDialog(QtWidgets.QDialog):
 
         self.name_input = QtWidgets.QLineEdit()
         self.teacher_input = QtWidgets.QLineEdit()
+        self.col_questions_input = QtWidgets.QLineEdit()
 
         form = QtWidgets.QFormLayout()
         form.addRow("Название теста:", self.name_input)
         form.addRow("Имя преподавателя:", self.teacher_input)
+        form.addRow(
+            "Количество выводимых вопросов в тесте:", self.col_questions_input
+        )
 
         btn_ok = QtWidgets.QPushButton("OK")
         btn_cancel = QtWidgets.QPushButton("Отмена")
@@ -140,6 +180,7 @@ class TestInfoDialog(QtWidgets.QDialog):
         return (
             self.name_input.text().strip(),
             self.teacher_input.text().strip(),
+            self.col_questions_input.text().strip(),
         )
 
 
@@ -201,11 +242,11 @@ class StartWindow(QtWidgets.QWidget):
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         )
         if reply == QtWidgets.QMessageBox.Yes:
-            self.open_test_window(test_id)
+            self.open_test_window(test_id, test_name)
 
-    def open_test_window(self, test_id):
+    def open_test_window(self, test_id, test_name):
         self.qeustion_window = QuestionWindow(
-            id_test=test_id, start_window=self
+            id_test=test_id, test_name=test_name, start_window=self
         )
         self.qeustion_window.show()
         self.close()
@@ -653,9 +694,9 @@ class QuestionEditor(QtWidgets.QWidget):
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
 
-        name_test, teacher_name = dialog.get_data()
+        name_test, teacher_name, col_view_questions = dialog.get_data()
 
-        if not name_test or not teacher_name:
+        if not name_test or not teacher_name or not col_view_questions:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Ошибка",
@@ -663,10 +704,20 @@ class QuestionEditor(QtWidgets.QWidget):
             )
             return
 
+        try:
+            col_view_questions = int(col_view_questions)
+        except Exception:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Количество вопросов должно быть числом.",
+            )
+
         with session_sync_factory() as session:
             new_test = TestsOrm(
                 name_test=name_test,
                 teacher=teacher_name,
+                col_view_questions=int(col_view_questions),
             )
 
             for i in range(len(self.question_list)):
@@ -822,7 +873,13 @@ class QuestionEditor(QtWidgets.QWidget):
 
 
 class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
-    def __init__(self, id_test: int, start_window: StartWindow, parent=None):
+    def __init__(
+        self,
+        id_test: int,
+        test_name: str,
+        start_window: StartWindow,
+        parent=None,
+    ):
         super().__init__(parent)
 
         self.last_window = start_window
@@ -832,10 +889,17 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         self.true_answer: int = 0
         self.count_question: int = 0
 
-        self.setWindowTitle("Вопрос")
+        self.setWindowTitle("Прохождение теста")
         self.resize(2000, 1000)
 
-        layout = QtWidgets.QVBoxLayout()
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.addWidget(QtWidgets.QLabel(f"Тест: {test_name}"))
+        down_main_layout = QtWidgets.QHBoxLayout()
+        self.question_grid = QuestionGrid(total_questions=15, cols=3)
+        down_main_layout.addWidget(self.question_grid)
+        self.text_edit = QtWidgets.QTextEdit()
+        down_main_layout.addWidget(self.text_edit)
+        main_layout.addLayout(down_main_layout)
 
         self.questions = self.get_question()
 
@@ -848,17 +912,17 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop
         )
         self.label_question.setWordWrap(True)
-        layout.addWidget(self.label_question)
+        main_layout.addWidget(self.label_question)
 
         self.answer = QtWidgets.QVBoxLayout()
         self.add_widgets_answer()
-        layout.addLayout(self.answer)
+        main_layout.addLayout(self.answer)
 
         self.btnNext = QtWidgets.QPushButton("&Следуюищйй вопрос")
         self.btnNext.clicked.connect(self.next_question)
-        layout.addWidget(self.btnNext)
+        main_layout.addWidget(self.btnNext)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
     # Загрузка следующего вопроса при прохождении теста
     @QtCore.pyqtSlot()
@@ -1096,6 +1160,7 @@ async def insert_data_database():
             teacher="Поляков",
             questions_check_box=[question1, question2],
             questions_replacement=[question3],
+            col_view_questions=3,
         )
         session.add(test)
         await session.flush()
