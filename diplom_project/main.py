@@ -141,9 +141,8 @@ class QuestionGrid(QtWidgets.QFrame):  # QFrame вместо QWidget
             col = i % cols
             btn = QtWidgets.QPushButton(str(i + 1))
             btn.setFixedSize(40, 40)
-            btn.setStyleSheet(
-                "background-color: lightgreen; border-radius: 5px;"
-            )
+            btn.setStyleSheet("background-color: white; border-radius: 5px;")
+            btn.setEnabled(False)
             self.grid.addWidget(btn, row, col)
             self.buttons.append(btn)
 
@@ -164,6 +163,29 @@ class QuestionGrid(QtWidgets.QFrame):  # QFrame вместо QWidget
             self.buttons[index].setStyleSheet(
                 f"background-color: {color}; border-radius: 5px;"
             )
+
+
+# Нижняя рамка с перемещением между вопросами
+class NavigationOnQuestion(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+
+        main_layout = QtWidgets.QHBoxLayout()
+
+        # Кнопка ответить
+        self.btn_reply_question = QtWidgets.QPushButton("Ответить на вопрос")
+        main_layout.addWidget(self.btn_reply_question)
+
+        # Кнопка предыдущий
+        self.btn_next_question = QtWidgets.QPushButton("Следующий вопрос")
+        main_layout.addWidget(self.btn_next_question)
+
+        # Кнопка закончить тестирование
+        self.btn_end_test = QtWidgets.QPushButton("Завершить тестирование")
+        self.btn_end_test.setEnabled(False)
+        main_layout.addWidget(self.btn_end_test)
+
+        self.setLayout(main_layout)
 
 
 class TestInfoDialog(QtWidgets.QDialog):
@@ -908,8 +930,8 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         self.last_window = start_window
 
         self.true_answer: int = 0
-        self.count_question: int = 0
         self.current_index: int = 0
+        self.do_question: int = 0
 
         self.setWindowTitle("Прохождение теста")
         self.resize(2000, 1000)
@@ -922,6 +944,9 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         # Загружаем список вопросов (а не генератор!)
         self.questions = self.get_questions()
         self.limit = len(self.questions)
+
+        # Список для контроля отвеченных и не отвеченных вопросов
+        self.not_look_question = [True] * self.limit
 
         down_main_layout = QtWidgets.QHBoxLayout()
         self.question_grid = QuestionGrid(total_questions=self.limit, cols=3)
@@ -938,40 +963,73 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop
         )
         self.label_question.setWordWrap(True)
-        self.right_layout.addWidget(self.label_question)
+        self.right_layout.addWidget(self.label_question, stretch=1)
 
         self.answer = QtWidgets.QVBoxLayout()
         self.right_layout.addLayout(self.answer)
 
-        self.btnNext = QtWidgets.QPushButton("&Следующий вопрос")
-        self.btnNext.clicked.connect(self.next_question)
-        self.right_layout.addWidget(self.btnNext)
+        self.navigation_on_questions = NavigationOnQuestion()
+        self.right_layout.addWidget(self.navigation_on_questions)
+        self.navigation_on_questions.btn_next_question.clicked.connect(
+            self.next_question
+        )
+        self.navigation_on_questions.btn_reply_question.clicked.connect(
+            self.reply_question
+        )
+        self.navigation_on_questions.btn_end_test.clicked.connect(
+            self.end_test
+        )
 
         down_main_layout.addLayout(self.right_layout, stretch=1)
         main_layout.addLayout(down_main_layout)
         self.setLayout(main_layout)
+        self.load_question(0)
 
-        # Загружаем первый вопрос
-        if self.questions:
-            self.load_question(0)
+    def prev_question(self):
+        pass
 
-    # Загрузка следующего вопроса при прохождении теста
     @QtCore.pyqtSlot()
-    def next_question(self):
+    def reply_question(self):
         if self.check_answer():
             self.true_answer += 1
 
-        if self.current_index + 1 >= len(self.questions):
-            self.label_question.setText(
-                "Вопросы закончились, ваш результат "
-                f"{round(self.true_answer / len(self.questions) * 100)} %"
+        self.not_look_question[self.current_index] = False
+
+        # закрасим кнопку зелёным
+        self.question_grid.set_button_color(self.current_index, "lightgreen")
+
+        self.next_question()
+
+    @QtCore.pyqtSlot()
+    def next_question(self):
+        # Поиск вопроса на который не получен ответ
+        start_index = (self.current_index + 1) % self.limit
+
+        # пробегаем все вопросы по кругу
+        for shift in range(self.limit):
+            idx = (start_index + shift) % self.limit
+            if self.not_look_question[idx]:
+                self.load_question(idx)
+                return
+
+        # если не нашли ни одного True — все вопросы отвечены
+        self.navigation_on_questions.btn_next_question.setEnabled(False)
+        self.navigation_on_questions.btn_end_test.setEnabled(True)
+
+    @QtCore.pyqtSlot()
+    def end_test(self):
+        clear_layout(self.right_layout)
+        self.right_layout.addWidget(
+            QtWidgets.QLabel(
+                f"Ваш результат: {round(self.true_answer/self.limit*100)}%"
             )
-            clear_layout(self.answer)
-            self.btnNext.clicked.disconnect(self.next_question)
-            self.btnNext.setText("Вернуться в главное меню")
-            self.btnNext.clicked.connect(self.comeback_startmenu)
-        else:
-            self.load_question(self.current_index + 1)
+        )
+        btn_comeback_startmenu = QtWidgets.QPushButton(
+            "Вернуться в главное меню"
+        )
+        btn_comeback_startmenu.clicked.connect(self.comeback_startmenu)
+
+        self.right_layout.addWidget(btn_comeback_startmenu)
 
     # Генератор с запросом к БД с получением данных о вопросе
     def get_questions(self):
@@ -1008,12 +1066,25 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             ]
 
     def load_question(self, index: int):
-        """Загружает вопрос по индексу"""
         if index < 0 or index >= len(self.questions):
             return
 
+        # Проверка получен ли ответ на загруженный вопрос или нет
+        if self.not_look_question[index]:
+            self.navigation_on_questions.btn_reply_question.setEnabled(True)
+        else:
+            self.navigation_on_questions.btn_reply_question.setEnabled(False)
+
         self.current_index = index
         self.current_question = self.questions[index]
+
+        # --- активация кнопки ---
+        btn = self.question_grid.buttons[index]
+        btn.setEnabled(True)
+
+        # Если на вопрос ещё не отвечали → жёлтая подсветка
+        if self.not_look_question[index]:
+            self.question_grid.set_button_color(index, "yellow")
 
         # Обновляем текст
         self.label_question.setText(self.current_question["question"])
