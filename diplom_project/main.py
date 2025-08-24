@@ -13,6 +13,7 @@ from models import (
     QuestionsCheckBoxOrm,
     QuestionsInputStringOrm,
     QuestionsReplacementOrm,
+    TagsOrm,
     TestsOrm,
 )
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -212,14 +213,10 @@ class TestInfoDialog(QtWidgets.QDialog):
 
         self.name_input = QtWidgets.QLineEdit()
         self.teacher_input = QtWidgets.QLineEdit()
-        self.col_questions_input = QtWidgets.QLineEdit()
 
         form = QtWidgets.QFormLayout()
         form.addRow("Название теста:", self.name_input)
         form.addRow("Имя преподавателя:", self.teacher_input)
-        form.addRow(
-            "Количество выводимых вопросов в тесте:", self.col_questions_input
-        )
 
         btn_ok = QtWidgets.QPushButton("Сохранить")
         btn_cancel = QtWidgets.QPushButton("Отмена")
@@ -241,7 +238,6 @@ class TestInfoDialog(QtWidgets.QDialog):
         return (
             self.name_input.text().strip(),
             self.teacher_input.text().strip(),
-            self.col_questions_input.text().strip(),
         )
 
 
@@ -812,83 +808,97 @@ class QuestionEditor(QtWidgets.QWidget):
     # Сохранение вопросов
     @QtCore.pyqtSlot()
     def save_all_questions(self):
-        dialog = TagInfoDialog(self.unique_tag, self)
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            tag_counts = dialog.get_data()
-            print("Введенные тэги:", tag_counts)
-        dialog = TestInfoDialog(self)
-        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+        # --- Сначала ввод количества тегов ---
+        tag_dialog = TagInfoDialog(self.unique_tag, self)
+        if tag_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            tag_counts = tag_dialog.get_data()  # {tag_name: count}
+        else:
             return
 
-        name_test, teacher_name, col_view_questions = dialog.get_data()
+        # --- Ввод информации о тесте ---
+        test_dialog = TestInfoDialog(self)
+        if test_dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
 
-        if not name_test or not teacher_name or not col_view_questions:
+        name_test, teacher_name = test_dialog.get_data()
+        if not name_test or not teacher_name:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Ошибка",
-                "Название теста и имя преподавателя не могут быть пустыми.",
+                "Название теста, имя преподавателя обязательны.",
             )
             return
-
-        try:
-            col_view_questions = int(col_view_questions)
-        except Exception:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Ошибка",
-                "Количество вопросов должно быть числом.",
-            )
 
         with session_sync_factory() as session:
-            new_test = TestsOrm(
-                name_test=name_test,
-                teacher=teacher_name,
-                col_view_questions=int(col_view_questions),
-            )
+            # Создаем тест
+            new_test = TestsOrm(name_test=name_test, teacher=teacher_name)
+            session.add(new_test)
+            session.flush()  # Чтобы получить id теста
 
-            for i in range(len(self.question_list)):
-                q_html, q_type, q_answer, q_tag = self.questions[i]
+            # --- Сохраняем теги ---
+            tags_map = {}  # {tag_name: TagsOrm}
+            for tag_name, count in tag_counts.items():
+                tag_obj = TagsOrm(
+                    name=tag_name,
+                    count=count,
+                    test=new_test,
+                )
+                session.add(tag_obj)
+                tags_map[tag_name] = tag_obj
+            session.flush()  # Получаем id тегов
+
+            # --- Сохраняем вопросы ---
+            for q_html, q_type, q_answer, q_tag in self.questions:
+                tag_obj = tags_map.get(
+                    q_tag or "Без тэга"
+                )  # сопоставляем тег объекту
 
                 if q_type == "Ввод строки":
-                    input_question = QuestionsInputStringOrm(
+                    question = QuestionsInputStringOrm(
                         test=new_test,
                         question=q_html,
                         answers=q_answer,
-                        tag=q_tag,
+                        tag_obj=tag_obj,
                     )
-                    session.add(input_question)
+                    session.add(question)
 
                 elif q_type == "Выбор правильн(ого/ых) ответов":
-                    checkbox_question = QuestionsCheckBoxOrm(
+                    question = QuestionsCheckBoxOrm(
                         test=new_test,
                         question=q_html,
-                        answers=[
-                            *[
-                                AnswersCheckBoxOrm(text=text, is_correct=True)
-                                for text in q_answer[0]
-                            ],
-                            *[
-                                AnswersCheckBoxOrm(text=text, is_correct=False)
-                                for text in q_answer[1]
-                            ],
-                        ],
-                        tag=q_tag,
+                        tag_obj=tag_obj,
                     )
-                    session.add(checkbox_question)
+                    # создаем ответы
+                    answers = [
+                        AnswersCheckBoxOrm(
+                            text=text, is_correct=True, question=question
+                        )
+                        for text in q_answer[0]
+                    ] + [
+                        AnswersCheckBoxOrm(
+                            text=text, is_correct=False, question=question
+                        )
+                        for text in q_answer[1]
+                    ]
+                    session.add_all(answers)
+                    session.add(question)
 
                 elif q_type == "Упорядочивание":
-                    order_question = QuestionsReplacementOrm(
+                    question = QuestionsReplacementOrm(
                         test=new_test,
                         question=q_html,
-                        answers=[
-                            AnswersReplacementOrm(
-                                text=q_answer[number_answer],
-                                number_in_answer=number_answer + 1,
-                            )
-                            for number_answer in range(len(q_answer))
-                        ],
+                        tag_obj=tag_obj,
                     )
-                    session.add(order_question)
+                    answers = [
+                        AnswersReplacementOrm(
+                            text=q_answer[i],
+                            number_in_answer=i + 1,
+                            question=question,
+                        )
+                        for i in range(len(q_answer))
+                    ]
+                    session.add_all(answers)
+                    session.add(question)
 
             session.commit()
 
@@ -1119,9 +1129,15 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             query = (
                 select(TestsOrm)
                 .options(
-                    selectinload(TestsOrm.questions_check_box),
-                    selectinload(TestsOrm.questions_replacement),
-                    selectinload(TestsOrm.questions_input_string),
+                    selectinload(TestsOrm.tags).selectinload(
+                        TagsOrm.questions_check_box
+                    ),
+                    selectinload(TestsOrm.tags).selectinload(
+                        TagsOrm.questions_replacement
+                    ),
+                    selectinload(TestsOrm.tags).selectinload(
+                        TagsOrm.questions_input_string
+                    ),
                 )
                 .where(TestsOrm.id == self.id_test)
             )
@@ -1130,21 +1146,30 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             if not test:
                 return []
 
-            all_questions = (
-                test.questions_check_box
-                + test.questions_replacement
-                + test.questions_input_string
-            )
-            chosen_questions = sample(
-                all_questions, min(len(all_questions), test.col_view_questions)
-            )
+            chosen_questions = []
+
+            # для каждого тэга — выбираем count вопросов из него
+            for tag in test.tags:
+                tag_questions = (
+                    tag.questions_check_box
+                    + tag.questions_replacement
+                    + tag.questions_input_string
+                )
+
+                if tag_questions:
+                    selected = sample(
+                        tag_questions, min(len(tag_questions), tag.count)
+                    )
+                    chosen_questions.extend(selected)
+
+            # возвращаем список вопросов с нужными данными
             return [
                 {
-                    "question": i.question,
-                    "answer": i.answers,
-                    "type": i.__tablename__,
+                    "question": q.question,
+                    "answer": q.answers,
+                    "type": q.__tablename__,
                 }
-                for i in chosen_questions
+                for q in chosen_questions
             ]
 
     def load_question(self, index: int):
@@ -1359,7 +1384,6 @@ async def insert_data_database():
             teacher="Поляков",
             questions_check_box=[question1, question2],
             questions_replacement=[question3],
-            col_view_questions=3,
         )
         session.add(test)
         await session.flush()
