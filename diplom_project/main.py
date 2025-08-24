@@ -110,43 +110,45 @@ class CustomTextEdit(QtWidgets.QTextEdit):
 
 
 # Реализация боковой панели со списков вопросов при прохождении теста
-class QuestionGrid(QtWidgets.QFrame):  # QFrame вместо QWidget
+class QuestionGrid(QtWidgets.QFrame):
     def __init__(self, total_questions=12, cols=3):
         super().__init__()
+
+        self.STATUS_COLORS = {
+            "Выбран": "lightblue",
+            "Отвечен": "lightgreen",
+            "Пропущен": "orange",
+            "Не просмотрен": "white",
+        }
+
+        self.buttons = []
+        self.status = []  # список текущих статусов кнопок
 
         # --- Оформление рамки ---
         self.setFrameShape(QtWidgets.QFrame.Box)
         self.setFrameShadow(QtWidgets.QFrame.Plain)
         self.setLineWidth(1)  # толщина рамки
-        self.setStyleSheet("QFrame { border: 1px solid gray; }")
 
-        # --- Основной вертикальный layout ---
         main_layout = QtWidgets.QVBoxLayout()
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(5)
-
-        # Заголовок
         title = QtWidgets.QLabel("Вопросы")
         title.setAlignment(QtCore.Qt.AlignCenter)
         title.setStyleSheet("font-weight: bold;")
         main_layout.addWidget(title)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
 
-        # Сетка кнопок
         self.grid = QtWidgets.QGridLayout()
         self.grid.setSpacing(5)
-        self.buttons = []
 
         for i in range(total_questions):
-            row = i // cols
-            col = i % cols
             btn = QtWidgets.QPushButton(str(i + 1))
             btn.setFixedSize(40, 40)
-            btn.setStyleSheet("background-color: white; border-radius: 5px;")
             btn.setEnabled(False)
-            self.grid.addWidget(btn, row, col)
             self.buttons.append(btn)
+            self.status.append("Не просмотрен")
+            self.grid.addWidget(btn, i // cols, i % cols)
+            self._apply_status_color(i)
 
-        # Прижимаем кнопки вверх
         self.grid.setRowStretch((total_questions // cols) + 1, 1)
 
         main_layout.addLayout(self.grid)
@@ -157,12 +159,27 @@ class QuestionGrid(QtWidgets.QFrame):  # QFrame вместо QWidget
             QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding
         )
 
-    def set_button_color(self, index, color):
-        """Изменить цвет кнопки (например, при ответе)"""
+    def _apply_status_color(self, index):
+        status = self.status[index]
+        color = self.STATUS_COLORS.get(status, "white")
+        self.buttons[index].setStyleSheet(
+            f"background-color: {color}; border-radius: 5px;"
+        )
+
+    def set_button_status(self, index, status):
         if 0 <= index < len(self.buttons):
-            self.buttons[index].setStyleSheet(
-                f"background-color: {color}; border-radius: 5px;"
-            )
+            self.status[index] = status
+            self._apply_status_color(index)
+
+    def reset_selected(self):
+        """Сбросить статус 'Выбран' у всех кнопок"""
+        for i, st in enumerate(self.status):
+            if st == "Выбран":
+                # если был выбран, то вернуть его в "Пропущен" или "Не просмотрен"
+                # (зависит от того, отвечен ли вопрос)
+                if st != "Отвечен":
+                    self.status[i] = "Пропущен"
+                self._apply_status_color(i)
 
 
 # Нижняя рамка с перемещением между вопросами
@@ -204,7 +221,7 @@ class TestInfoDialog(QtWidgets.QDialog):
             "Количество выводимых вопросов в тесте:", self.col_questions_input
         )
 
-        btn_ok = QtWidgets.QPushButton("OK")
+        btn_ok = QtWidgets.QPushButton("Сохранить")
         btn_cancel = QtWidgets.QPushButton("Отмена")
 
         btn_ok.clicked.connect(self.accept)
@@ -226,6 +243,46 @@ class TestInfoDialog(QtWidgets.QDialog):
             self.teacher_input.text().strip(),
             self.col_questions_input.text().strip(),
         )
+
+
+class TagInfoDialog(QtWidgets.QDialog):
+    def __init__(self, tag_dict: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Количество тэгов")
+
+        self.form = QtWidgets.QFormLayout()
+        self.inputs = {}  # здесь будем хранить QLineEdit для каждого тэга
+
+        for tag, col_tag in tag_dict.items():
+            str_input_tag = QtWidgets.QLineEdit(str(col_tag))
+            str_input_tag.setValidator(
+                QtGui.QIntValidator(0, col_tag, self)
+            )  # только числа
+            self.inputs[tag] = str_input_tag
+            self.form.addRow(f"{tag}: ", str_input_tag)
+
+        btn_ok = QtWidgets.QPushButton("ОК")
+        btn_cancel = QtWidgets.QPushButton("Отмена")
+
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.addLayout(self.form)
+        main_layout.addLayout(btn_layout)
+        self.setLayout(main_layout)
+
+    def get_data(self) -> dict:
+        result = {}
+        for tag, line_edit in self.inputs.items():
+            text = line_edit.text().strip()
+            result[tag] = int(text) if text.isdigit() else 0
+        return result
 
 
 # Стартовое окно
@@ -521,6 +578,9 @@ class QuestionEditor(QtWidgets.QWidget):
 
         self.questions = []  # Список временных вопросов
         self.current_edit_index = None
+        self.flag_change_question = False
+        self.current_load_tag = None
+        self.unique_tag = {"Без тэга": 0}
 
         self.answer_on_question = QuestionEditorWidget()
         self.tag_for_question = QtWidgets.QLineEdit()
@@ -667,22 +727,39 @@ class QuestionEditor(QtWidgets.QWidget):
                 if isinstance(widget, QtWidgets.QLineEdit):
                     answer.append(widget.text())
 
-        tag = self.tag_for_question.text()
+        # --- работа с тэгами ---
+        new_tag = self.tag_for_question.text().strip() or "Без тэга"
 
-        item_text = f"{tag or 'Без тега'} — {html[:-18][435:500]}..."
+        # если редактируем существующий вопрос
+        if self.current_edit_index is not None:
+            _, _, _, old_tag = self.questions[self.current_edit_index]
+            old_tag = old_tag or "Без тэга"
+
+            # уменьшаем старый счётчик
+            if old_tag in self.unique_tag:
+                self.unique_tag[old_tag] -= 1
+                if self.unique_tag[old_tag] <= 0:
+                    del self.unique_tag[old_tag]
+
+        # увеличиваем счётчик нового тэга
+        self.unique_tag[new_tag] = self.unique_tag.get(new_tag, 0) + 1
+
+        item_text = f"{new_tag or 'Без тега'} — {html[:-18][435:500]}..."
 
         if self.current_edit_index is not None:
             self.questions[self.current_edit_index] = (
                 html,
                 type_answer,
                 answer,
-                tag or None,
+                new_tag or None,
             )
             self.question_list.item(self.current_edit_index).setText(item_text)
             self.current_edit_index = None
         else:
-            self.questions.append((html, type_answer, answer, tag or None))
+            self.questions.append((html, type_answer, answer, new_tag or None))
             self.question_list.addItem(item_text)
+
+        self.current_load_tag = None
 
         self.clear_question_fields()
 
@@ -728,12 +805,17 @@ class QuestionEditor(QtWidgets.QWidget):
                     self.answer_on_question.main_layout, answer[i]
                 )
 
+        self.flag_change_question = True  # Сохраняем в памяти, чтобы при изменении пересчитать количество уникальных тэгов
         self.tag_for_question.setText(tag)
         self.current_edit_index = index
 
     # Сохранение вопросов
     @QtCore.pyqtSlot()
     def save_all_questions(self):
+        dialog = TagInfoDialog(self.unique_tag, self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            tag_counts = dialog.get_data()
+            print("Введенные тэги:", tag_counts)
         dialog = TestInfoDialog(self)
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
@@ -995,8 +1077,8 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
 
         self.not_look_question[self.current_index] = False
 
-        # закрасим кнопку зелёным
-        self.question_grid.set_button_color(self.current_index, "lightgreen")
+        # статус → отвечен
+        self.question_grid.set_button_status(self.current_index, "Отвечен")
 
         self.next_question()
 
@@ -1069,30 +1151,25 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         if index < 0 or index >= len(self.questions):
             return
 
-        # Проверка получен ли ответ на загруженный вопрос или нет
-        if self.not_look_question[index]:
-            self.navigation_on_questions.btn_reply_question.setEnabled(True)
-        else:
-            self.navigation_on_questions.btn_reply_question.setEnabled(False)
+        # сбросить предыдущий выбор
+        self.question_grid.reset_selected()
 
         self.current_index = index
         self.current_question = self.questions[index]
 
-        # --- активация кнопки ---
-        btn = self.question_grid.buttons[index]
-        btn.setEnabled(True)
+        # кнопка "ответить" активна только если ещё не отвечен
+        self.navigation_on_questions.btn_reply_question.setEnabled(
+            self.not_look_question[index]
+        )
 
-        # Если на вопрос ещё не отвечали → жёлтая подсветка
-        if self.not_look_question[index]:
-            self.question_grid.set_button_color(index, "yellow")
+        # статус текущей кнопки → выбран
+        self.question_grid.set_button_status(index, "Выбран")
 
-        # Обновляем текст
+        # текст вопроса
         self.label_question.setText(self.current_question["question"])
 
-        # Чистим старые ответы
+        # очистка и добавление новых ответов
         clear_layout(self.answer)
-
-        # Добавляем новые
         self.add_widgets_answer()
 
     # Загрузка в окно с вопросом подходящий под вопрос виджет
