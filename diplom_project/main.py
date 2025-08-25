@@ -54,15 +54,31 @@ def clear_layout(layout):
 # Миксин для реализации вопросов с очередностью
 class QuestionReplacementMixin:
     def handle_replacement_click(self, button):
+        # если вопрос уже отвечен — клики игнорируем
+        if not self.not_look_question[self.current_index]:
+            return
+
         if button in self.replacement_order:
             self.replacement_order.remove(button)
         else:
             self.replacement_order.append(button)
+
         self.update_replacement_labels()
 
+        all_selected = len(self.replacement_order) == len(
+            self.current_question.get("replacement_buttons", [])
+        )
+
+        # включаем "ответить" только если вопрос ещё не отвечен
+        self.navigation_on_questions.btn_reply_question.setEnabled(
+            all_selected and self.not_look_question[self.current_index]
+        )
+
     def update_replacement_labels(self):
+        # Нумерация выбранных кнопок
         for i, button in enumerate(self.replacement_order):
             button.setText(f"{i+1}")
+        # Остальные кнопки остаются пустыми
         for button in self.current_question.get("replacement_buttons", []):
             if button not in self.replacement_order:
                 button.setText("")
@@ -116,19 +132,20 @@ class QuestionGrid(QtWidgets.QFrame):
         super().__init__()
 
         self.STATUS_COLORS = {
-            "Выбран": "lightblue",
+            "Выбран": "lightblue",  # временная подсветка, не сохраняем в status
             "Отвечен": "lightgreen",
             "Пропущен": "orange",
             "Не просмотрен": "white",
         }
 
         self.buttons = []
-        self.status = []  # список текущих статусов кнопок
+        self.status = []  # реальный статус каждой кнопки (без "Выбран")
+        self.selected_index = None  # кто сейчас открыт
 
         # --- Оформление рамки ---
         self.setFrameShape(QtWidgets.QFrame.Box)
         self.setFrameShadow(QtWidgets.QFrame.Plain)
-        self.setLineWidth(1)  # толщина рамки
+        self.setLineWidth(1)
 
         main_layout = QtWidgets.QVBoxLayout()
         title = QtWidgets.QLabel("Вопросы")
@@ -143,44 +160,62 @@ class QuestionGrid(QtWidgets.QFrame):
 
         for i in range(total_questions):
             btn = QtWidgets.QPushButton(str(i + 1))
-            btn.setFixedSize(40, 40)
-            btn.setEnabled(False)
+            btn.setFixedSize(40, 40)  # кнопки оставляем ВКЛЮЧЁННЫМИ
             self.buttons.append(btn)
             self.status.append("Не просмотрен")
             self.grid.addWidget(btn, i // cols, i % cols)
             self._apply_status_color(i)
 
         self.grid.setRowStretch((total_questions // cols) + 1, 1)
-
         main_layout.addLayout(self.grid)
         self.setLayout(main_layout)
 
-        # Размер панели
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding
         )
 
-    def _apply_status_color(self, index):
-        status = self.status[index]
-        color = self.STATUS_COLORS.get(status, "white")
+    def _apply_status_color(self, index: int):
+        """Красим кнопку: если выбран — синий, иначе по реальному статусу."""
+        if index == self.selected_index:
+            color = self.STATUS_COLORS["Выбран"]
+        else:
+            color = self.STATUS_COLORS.get(self.status[index], "white")
         self.buttons[index].setStyleSheet(
             f"background-color: {color}; border-radius: 5px;"
         )
 
-    def set_button_status(self, index, status):
-        if 0 <= index < len(self.buttons):
+    def set_button_status(self, index: int, status: str):
+        """
+        Универсальный метод для совместимости со старым кодом.
+        - Если просят 'Выбран' — просто подсвечиваем (не меняем self.status).
+        - Иначе меняем реальный статус и перекрашиваем.
+        """
+        if not (0 <= index < len(self.buttons)):
+            return
+
+        if status == "Выбран":
+            # сначала снимем прошлый выбор (и, если надо, отметим как 'Пропущен')
+            self.reset_selected()
+            self.selected_index = index
+            self._apply_status_color(index)
+        else:
             self.status[index] = status
             self._apply_status_color(index)
 
     def reset_selected(self):
-        """Сбросить статус 'Выбран' у всех кнопок"""
-        for i, st in enumerate(self.status):
-            if st == "Выбран":
-                # если был выбран, то вернуть его в "Пропущен" или "Не просмотрен"
-                # (зависит от того, отвечен ли вопрос)
-                if st != "Отвечен":
-                    self.status[i] = "Пропущен"
-                self._apply_status_color(i)
+        """
+        Снять синюю подсветку с текущего выбранного.
+        Если уход с вопроса, который не 'Отвечен' — помечаем его как 'Пропущен'.
+        """
+        prev = self.selected_index
+        if prev is not None:
+            if self.status[prev] != "Отвечен":
+                self.status[prev] = "Пропущен"
+        self.selected_index = None
+
+        # Перекрашиваем всё, чтобы цвета точно соответствовали статусам
+        for i in range(len(self.buttons)):
+            self._apply_status_color(i)
 
 
 # Нижняя рамка с перемещением между вопросами
@@ -1082,29 +1117,32 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
 
     @QtCore.pyqtSlot()
     def reply_question(self):
+        if not self.not_look_question[self.current_index]:
+            # уже отвечен → ничего не делаем
+            return
+
         if self.check_answer():
             self.true_answer += 1
 
         self.not_look_question[self.current_index] = False
-
-        # статус → отвечен
         self.question_grid.set_button_status(self.current_index, "Отвечен")
+
+        # блокируем кнопку "ответить" сразу после ответа
+        self.navigation_on_questions.btn_reply_question.setEnabled(False)
 
         self.next_question()
 
     @QtCore.pyqtSlot()
     def next_question(self):
-        # Поиск вопроса на который не получен ответ
         start_index = (self.current_index + 1) % self.limit
 
-        # пробегаем все вопросы по кругу
         for shift in range(self.limit):
             idx = (start_index + shift) % self.limit
             if self.not_look_question[idx]:
                 self.load_question(idx)
                 return
 
-        # если не нашли ни одного True — все вопросы отвечены
+        # все вопросы отвечены
         self.navigation_on_questions.btn_next_question.setEnabled(False)
         self.navigation_on_questions.btn_end_test.setEnabled(True)
 
@@ -1182,11 +1220,6 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         self.current_index = index
         self.current_question = self.questions[index]
 
-        # кнопка "ответить" активна только если ещё не отвечен
-        self.navigation_on_questions.btn_reply_question.setEnabled(
-            self.not_look_question[index]
-        )
-
         # статус текущей кнопки → выбран
         self.question_grid.set_button_status(index, "Выбран")
 
@@ -1196,6 +1229,17 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         # очистка и добавление новых ответов
         clear_layout(self.answer)
         self.add_widgets_answer()
+
+        # кнопка "ответить":
+        # если вопрос уже отвечен — отключаем её
+        if not self.not_look_question[index]:
+            self.navigation_on_questions.btn_reply_question.setEnabled(False)
+        elif self.current_question["type"] == "QuestionsReplacement":
+            # для replacement активируем только когда всё выбрано
+            self.navigation_on_questions.btn_reply_question.setEnabled(False)
+        else:
+            # для остальных типов активируем сразу
+            self.navigation_on_questions.btn_reply_question.setEnabled(True)
 
     # Загрузка в окно с вопросом подходящий под вопрос виджет
     def add_widgets_answer(self):
@@ -1274,6 +1318,15 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
             if answer_user == self.current_question["answer"]:
                 return True
         return False
+
+    def check_replacement_ready(self):
+        if self.current_question["type"] == "QuestionsReplacement":
+            # Все кнопки должны быть нажаты (т.е. текст не пустой)
+            for btn in self.current_question["replacement_buttons"]:
+                if btn.text().strip() == "":
+                    return False
+            return True
+        return True
 
     # Возвращение в главное меню
     @QtCore.pyqtSlot()
