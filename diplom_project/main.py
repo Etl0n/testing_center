@@ -20,7 +20,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtGui import QFont, QImage, QTextCharFormat
 from PyQt5.QtWidgets import QFileDialog
 from qasync import QEventLoop
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import selectinload, sessionmaker
 
@@ -242,78 +242,94 @@ class NavigationOnQuestion(QtWidgets.QWidget):
 
 
 class TestInfoDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, test_name=None, teacher_name=None):
         super().__init__(parent)
         self.setWindowTitle("Информация о тесте")
+        self.resize(400, 200)
 
-        self.name_input = QtWidgets.QLineEdit()
-        self.teacher_input = QtWidgets.QLineEdit()
+        layout = QtWidgets.QFormLayout(self)
 
-        form = QtWidgets.QFormLayout()
-        form.addRow("Название теста:", self.name_input)
-        form.addRow("Имя преподавателя:", self.teacher_input)
+        self.name_edit = QtWidgets.QLineEdit(test_name or "")
+        self.teacher_edit = QtWidgets.QLineEdit(teacher_name or "")
 
-        btn_ok = QtWidgets.QPushButton("Сохранить")
-        btn_cancel = QtWidgets.QPushButton("Отмена")
+        layout.addRow("Название теста:", self.name_edit)
+        layout.addRow("Преподаватель:", self.teacher_edit)
 
-        btn_ok.clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
 
-        btn_layout = QtWidgets.QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
-
-        main_layout = QtWidgets.QVBoxLayout()
-        main_layout.addLayout(form)
-        main_layout.addLayout(btn_layout)
-        self.setLayout(main_layout)
+        layout.addRow(buttons)
 
     def get_data(self):
-        return (
-            self.name_input.text().strip(),
-            self.teacher_input.text().strip(),
-        )
+        return self.name_edit.text().strip(), self.teacher_edit.text().strip()
 
 
 class TagInfoDialog(QtWidgets.QDialog):
-    def __init__(self, tag_dict: dict, parent=None):
+    def __init__(self, unique_tag, parent=None, existing_tags=None):
         super().__init__(parent)
-        self.setWindowTitle("Количество тэгов")
+        self.setWindowTitle("Количество вопросов по тегам")
+        self.resize(400, 300)
 
-        self.form = QtWidgets.QFormLayout()
-        self.inputs = {}  # здесь будем хранить QLineEdit для каждого тэга
+        self.unique_tag = unique_tag
+        self.existing_tags = existing_tags or {}  # Существующие теги из БД
 
-        for tag, col_tag in tag_dict.items():
-            str_input_tag = QtWidgets.QLineEdit(str(col_tag))
-            str_input_tag.setValidator(
-                QtGui.QIntValidator(0, col_tag, self)
-            )  # только числа
-            self.inputs[tag] = str_input_tag
-            self.form.addRow(f"{tag}: ", str_input_tag)
+        layout = QtWidgets.QVBoxLayout(self)
 
-        btn_ok = QtWidgets.QPushButton("ОК")
-        btn_cancel = QtWidgets.QPushButton("Отмена")
+        self.scroll_area = QtWidgets.QScrollArea()
+        self.scroll_widget = QtWidgets.QWidget()
+        self.scroll_layout = QtWidgets.QVBoxLayout(self.scroll_widget)
 
-        btn_ok.clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
+        self.tag_widgets = {}
 
-        btn_layout = QtWidgets.QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
+        # Объединяем теги из текущей сессии и существующие из БД
+        all_tags = set(unique_tag.keys()) | set(
+            existing_tags.keys() if existing_tags else []
+        )
 
-        main_layout = QtWidgets.QVBoxLayout()
-        main_layout.addLayout(self.form)
-        main_layout.addLayout(btn_layout)
-        self.setLayout(main_layout)
+        for tag_name in sorted(all_tags):
+            tag_layout = QtWidgets.QHBoxLayout()
 
-    def get_data(self) -> dict:
-        result = {}
-        for tag, line_edit in self.inputs.items():
-            text = line_edit.text().strip()
-            result[tag] = int(text) if text.isdigit() else 0
-        return result
+            tag_label = QtWidgets.QLabel(tag_name)
+            tag_label.setFixedWidth(150)
+
+            count_spin = QtWidgets.QSpinBox()
+            count_spin.setMinimum(1)
+            count_spin.setMaximum(100)
+
+            # Устанавливаем значение: сначала из текущей сессии, потом из существующих
+            if tag_name in unique_tag:
+                count_spin.setValue(unique_tag[tag_name])
+            elif existing_tags and tag_name in existing_tags:
+                count_spin.setValue(existing_tags[tag_name])
+            else:
+                count_spin.setValue(1)
+
+            tag_layout.addWidget(tag_label)
+            tag_layout.addWidget(count_spin)
+            tag_layout.addStretch()
+
+            self.scroll_layout.addLayout(tag_layout)
+            self.tag_widgets[tag_name] = count_spin
+
+        self.scroll_area.setWidget(self.scroll_widget)
+        layout.addWidget(
+            QtWidgets.QLabel("Укажите количество вопросов для каждого тега:")
+        )
+        layout.addWidget(self.scroll_area)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        return {tag: spin.value() for tag, spin in self.tag_widgets.items()}
 
 
 # Стартовое окно
@@ -344,11 +360,23 @@ class StartWindow(QtWidgets.QWidget):
         self.btn_create_test = QtWidgets.QPushButton("Создать новый тест")
         self.btn_create_test.clicked.connect(self.open_create_test_window)
 
+        # Кнопка редактирования теста
+        self.btn_edit_test = QtWidgets.QPushButton("Редактировать тест")
+        self.btn_edit_test.clicked.connect(self.open_edit_test_window)
+
+        # Горизонтальный макет для кнопок
+        button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addWidget(self.btn_create_test)
+        button_layout.addWidget(self.btn_edit_test)
+
         # Добавление виджетов
         main_layout.addWidget(self.label)
         main_layout.addWidget(QtWidgets.QLabel("Доступные тесты:"))
-        main_layout.addWidget(self.test_list, 1)
-        main_layout.addWidget(self.btn_create_test)
+        main_layout.addWidget(self.test_list)
+        main_layout.addLayout(button_layout)
+
+        # Загрузка тестов
+        self.load_tests()
 
     def load_tests(self):
         self.test_list.clear()
@@ -386,6 +414,64 @@ class StartWindow(QtWidgets.QWidget):
     def open_create_test_window(self):
         self.qeustion_window = QuestionEditor()
         self.qeustion_window.show()
+        self.close()
+
+    def open_edit_test_window(self):
+        # Диалог выбора теста для редактирования
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Выбор теста для редактирования")
+        dialog.setModal(True)
+        dialog.resize(500, 400)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        # Список тестов
+        test_list = QtWidgets.QListWidget()
+        layout.addWidget(QtWidgets.QLabel("Выберите тест для редактирования:"))
+        layout.addWidget(test_list)
+
+        # Кнопки
+        button_layout = QtWidgets.QHBoxLayout()
+        select_btn = QtWidgets.QPushButton("Выбрать")
+        cancel_btn = QtWidgets.QPushButton("Отмена")
+        button_layout.addWidget(select_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+
+        # Загрузка тестов
+        with session_sync_factory() as session:
+            tests = session.scalars(select(TestsOrm)).all()
+            for test in tests:
+                item = QtWidgets.QListWidgetItem(
+                    f"{test.name_test} — {test.teacher}"
+                )
+                item.setData(QtCore.Qt.UserRole, test.id)
+                test_list.addItem(item)
+
+        def on_select():
+            selected_item = test_list.currentItem()
+            if selected_item:
+                test_id = selected_item.data(QtCore.Qt.UserRole)
+                test_name = selected_item.text()
+                dialog.accept()
+
+                # Открываем редактор с загруженным тестом
+                self.open_question_editor_with_test(test_id, test_name)
+
+        def on_cancel():
+            dialog.reject()
+
+        select_btn.clicked.connect(on_select)
+        cancel_btn.clicked.connect(on_cancel)
+        test_list.itemDoubleClicked.connect(on_select)
+
+        dialog.exec_()
+
+    def open_question_editor_with_test(self, test_id, test_name):
+        self.question_window = QuestionEditor(
+            test_id=test_id, test_name=test_name
+        )
+        self.question_window.show()
         self.close()
 
 
@@ -603,9 +689,16 @@ class QuestionEditorWidget(QtWidgets.QWidget):
 
 
 class QuestionEditor(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self, test_id=None, test_name=None):
         super().__init__()
-        self.setWindowTitle("Создание теста")
+
+        self.test_id = test_id  # ID редактируемого теста
+        self.test_name = test_name  # Название редактируемого теста
+
+        if test_id:
+            self.setWindowTitle(f"Редактирование теста: {test_name}")
+        else:
+            self.setWindowTitle("Создание теста")
 
         self.questions = []  # Список временных вопросов
         self.current_edit_index = None
@@ -687,6 +780,9 @@ class QuestionEditor(QtWidgets.QWidget):
         self.add_question_btn.clicked.connect(self.save_question_temp)
         self.save_test_btn.clicked.connect(self.save_all_questions)
 
+        if test_id:
+            self.load_existing_test()
+
     @QtCore.pyqtSlot()
     def insert_table(self):
         rows, ok1 = QtWidgets.QInputDialog.getInt(
@@ -759,39 +855,53 @@ class QuestionEditor(QtWidgets.QWidget):
                     answer.append(widget.text())
 
         # --- работа с тэгами ---
-        new_tag = self.tag_for_question.text().strip() or "Без тэга"
+        new_tag = self.tag_for_question.text().strip()
+        if not new_tag:  # Если поле тега пустое
+            new_tag = None  # Сохраняем как None, а не "Без тэга"
+
+        tag_display = new_tag or "Без тэга"  # Для отображения
 
         # если редактируем существующий вопрос
         if self.current_edit_index is not None:
             _, _, _, old_tag = self.questions[self.current_edit_index]
-            old_tag = old_tag or "Без тэга"
+            old_tag_display = old_tag or "Без тэга"  # Для отображения
 
-            # уменьшаем старый счётчик
-            if old_tag in self.unique_tag:
-                self.unique_tag[old_tag] -= 1
-                if self.unique_tag[old_tag] <= 0:
-                    del self.unique_tag[old_tag]
+            # Если тег изменился, обновляем счетчики
+            if old_tag_display != tag_display:
+                # Уменьшаем счетчик старого тега
+                if old_tag_display in self.unique_tag:
+                    self.unique_tag[old_tag_display] -= 1
+                    if self.unique_tag[old_tag_display] <= 0:
+                        del self.unique_tag[old_tag_display]
 
-        # увеличиваем счётчик нового тэга
-        self.unique_tag[new_tag] = self.unique_tag.get(new_tag, 0) + 1
+                # Увеличиваем счетчик нового тега
+                self.unique_tag[tag_display] = (
+                    self.unique_tag.get(tag_display, 0) + 1
+                )
+        else:
+            # Увеличиваем счетчик нового тега для нового вопроса
+            self.unique_tag[tag_display] = (
+                self.unique_tag.get(tag_display, 0) + 1
+            )
 
-        item_text = f"{new_tag or 'Без тега'} — {html[:-18][435:500]}..."
+        item_text = (
+            f"{tag_display} — {html[:50]}..."  # Обрезаем HTML для отображения
+        )
 
         if self.current_edit_index is not None:
             self.questions[self.current_edit_index] = (
                 html,
                 type_answer,
                 answer,
-                new_tag or None,
+                new_tag,  # Сохраняем как None если пусто
             )
             self.question_list.item(self.current_edit_index).setText(item_text)
             self.current_edit_index = None
         else:
-            self.questions.append((html, type_answer, answer, new_tag or None))
+            self.questions.append((html, type_answer, answer, new_tag))
             self.question_list.addItem(item_text)
 
         self.current_load_tag = None
-
         self.clear_question_fields()
 
     # Загрузка из памяти сохраненного вопроса
@@ -799,7 +909,6 @@ class QuestionEditor(QtWidgets.QWidget):
         self.clear_question_fields()
 
         index = self.question_list.row(item)
-
         html, type_answer, answer, tag = self.questions[index]
 
         self.answer_on_question.question_text.setHtml(html)
@@ -836,22 +945,24 @@ class QuestionEditor(QtWidgets.QWidget):
                     self.answer_on_question.main_layout, answer[i]
                 )
 
-        self.flag_change_question = True  # Сохраняем в памяти, чтобы при изменении пересчитать количество уникальных тэгов
-        self.tag_for_question.setText(tag)
+        self.flag_change_question = True
+        # Устанавливаем текст тега (пустую строку если None)
+        self.tag_for_question.setText(tag if tag else "")
         self.current_edit_index = index
 
-    # Сохранение вопросов
+    # Сохранение всех вопросов
     @QtCore.pyqtSlot()
     def save_all_questions(self):
-        # --- Сначала ввод количества тегов ---
-        tag_dialog = TagInfoDialog(self.unique_tag, self)
-        if tag_dialog.exec_() == QtWidgets.QDialog.Accepted:
-            tag_counts = tag_dialog.get_data()  # {tag_name: count}
-        else:
-            return
-
         # --- Ввод информации о тесте ---
-        test_dialog = TestInfoDialog(self)
+        if self.test_id:  # Если редактируем существующий тест
+            with session_sync_factory() as session:
+                test = session.get(TestsOrm, self.test_id)
+                test_dialog = TestInfoDialog(
+                    self, test.name_test, test.teacher
+                )
+        else:  # Если создаем новый тест
+            test_dialog = TestInfoDialog(self)
+
         if test_dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
 
@@ -864,11 +975,64 @@ class QuestionEditor(QtWidgets.QWidget):
             )
             return
 
+        # --- Сначала ввод количества тегов ---
+        # Используем актуальные счетчики из unique_tag
+        tag_dialog = TagInfoDialog(self.unique_tag, self)
+        if tag_dialog.exec_() == QtWidgets.QDialog.Accepted:
+            tag_counts = tag_dialog.get_data()  # {tag_name: count}
+        else:
+            return
+
         with session_sync_factory() as session:
-            # Создаем тест
-            new_test = TestsOrm(name_test=name_test, teacher=teacher_name)
-            session.add(new_test)
-            session.flush()  # Чтобы получить id теста
+            # Проверяем, существует ли уже тест с таким названием (только для нового теста)
+            if not self.test_id:
+                existing_test = session.scalar(
+                    select(TestsOrm).where(TestsOrm.name_test == name_test)
+                )
+                if existing_test:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Ошибка",
+                        f"Тест с названием '{name_test}' уже существует. Пожалуйста, выберите другое название.",
+                    )
+                    return
+
+            # Если редактируем существующий тест, сначала удаляем старые данные
+            if self.test_id:
+                # Удаляем старые вопросы и связанные данные
+                session.execute(
+                    delete(QuestionsInputStringOrm).where(
+                        QuestionsInputStringOrm.test_id == self.test_id
+                    )
+                )
+                session.execute(
+                    delete(QuestionsCheckBoxOrm).where(
+                        QuestionsCheckBoxOrm.test_id == self.test_id
+                    )
+                )
+                session.execute(
+                    delete(QuestionsReplacementOrm).where(
+                        QuestionsReplacementOrm.test_id == self.test_id
+                    )
+                )
+
+                # Удаляем старые теги
+                session.execute(
+                    delete(TagsOrm).where(TagsOrm.test_id == self.test_id)
+                )
+
+                # Обновляем информацию о тесте
+                test = session.get(TestsOrm, self.test_id)
+                test.name_test = name_test
+                test.teacher = teacher_name
+                session.flush()
+                test_id = self.test_id
+            else:
+                # Создаем новый тест
+                new_test = TestsOrm(name_test=name_test, teacher=teacher_name)
+                session.add(new_test)
+                session.flush()  # Чтобы получить id теста
+                test_id = new_test.id
 
             # --- Сохраняем теги ---
             tags_map = {}  # {tag_name: TagsOrm}
@@ -876,7 +1040,7 @@ class QuestionEditor(QtWidgets.QWidget):
                 tag_obj = TagsOrm(
                     name=tag_name,
                     count=count,
-                    test=new_test,
+                    test_id=test_id,
                 )
                 session.add(tag_obj)
                 tags_map[tag_name] = tag_obj
@@ -884,60 +1048,184 @@ class QuestionEditor(QtWidgets.QWidget):
 
             # --- Сохраняем вопросы ---
             for q_html, q_type, q_answer, q_tag in self.questions:
-                tag_obj = tags_map.get(
-                    q_tag or "Без тэга"
-                )  # сопоставляем тег объекту
+                tag_name = q_tag or "Без тэга"
+                tag_obj = tags_map.get(tag_name)
 
                 if q_type == "Ввод строки":
                     question = QuestionsInputStringOrm(
-                        test=new_test,
+                        test_id=test_id,
                         question=q_html,
                         answers=q_answer,
-                        tag_obj=tag_obj,
+                        tag_id=tag_obj.id if tag_obj else None,
                     )
                     session.add(question)
 
                 elif q_type == "Выбор правильн(ого/ых) ответов":
                     question = QuestionsCheckBoxOrm(
-                        test=new_test,
+                        test_id=test_id,
                         question=q_html,
-                        tag_obj=tag_obj,
+                        tag_id=tag_obj.id if tag_obj else None,
                     )
+                    session.add(question)
+                    session.flush()  # Получаем id вопроса
+
                     # создаем ответы
                     answers = [
                         AnswersCheckBoxOrm(
-                            text=text, is_correct=True, question=question
+                            text=text, is_correct=True, question_id=question.id
                         )
                         for text in q_answer[0]
                     ] + [
                         AnswersCheckBoxOrm(
-                            text=text, is_correct=False, question=question
+                            text=text,
+                            is_correct=False,
+                            question_id=question.id,
                         )
                         for text in q_answer[1]
                     ]
                     session.add_all(answers)
-                    session.add(question)
 
                 elif q_type == "Упорядочивание":
                     question = QuestionsReplacementOrm(
-                        test=new_test,
+                        test_id=test_id,
                         question=q_html,
-                        tag_obj=tag_obj,
+                        tag_id=tag_obj.id if tag_obj else None,
                     )
+                    session.add(question)
+                    session.flush()  # Получаем id вопроса
+
                     answers = [
                         AnswersReplacementOrm(
                             text=q_answer[i],
                             number_in_answer=i + 1,
-                            question=question,
+                            question_id=question.id,
                         )
                         for i in range(len(q_answer))
                     ]
                     session.add_all(answers)
-                    session.add(question)
 
             session.commit()
 
+        QtWidgets.QMessageBox.information(
+            self,
+            "Успех",
+            f"Тест '{name_test}' успешно {'сохранен' if self.test_id else 'создан'}!",
+        )
         self.comeback_startmenu()
+
+    # Загрузка существущего теста
+    def load_existing_test(self):
+        """Загрузка вопросов существующего теста"""
+        with session_sync_factory() as session:
+            # Загрузка вопросов разных типов
+            input_string_questions = session.scalars(
+                select(QuestionsInputStringOrm).where(
+                    QuestionsInputStringOrm.test_id == self.test_id
+                )
+            ).all()
+
+            checkbox_questions = session.scalars(
+                select(QuestionsCheckBoxOrm).where(
+                    QuestionsCheckBoxOrm.test_id == self.test_id
+                )
+            ).all()
+
+            replacement_questions = session.scalars(
+                select(QuestionsReplacementOrm).where(
+                    QuestionsReplacementOrm.test_id == self.test_id
+                )
+            ).all()
+
+            # Загрузка всех тегов для этого теста
+            tags = session.scalars(
+                select(TagsOrm).where(TagsOrm.test_id == self.test_id)
+            ).all()
+            tags_dict = {tag.id: tag for tag in tags}  # Словарь тегов по id
+
+            # Сбрасываем счетчик тегов и начинаем подсчет заново
+            self.unique_tag = {}
+
+            # Обработка вопросов с вводом строки
+            for question in input_string_questions:
+                tag_name = "Без тэга"
+                if question.tag_id and question.tag_id in tags_dict:
+                    tag_name = tags_dict[question.tag_id].name
+                self.unique_tag[tag_name] = (
+                    self.unique_tag.get(tag_name, 0) + 1
+                )
+
+                self.questions.append(
+                    (
+                        question.question,
+                        "Ввод строки",
+                        question.answers,
+                        tag_name if tag_name != "Без тэга" else None,
+                    )
+                )
+                item_text = f"{tag_name} — {question.question[:50]}..."
+                self.question_list.addItem(item_text)
+
+            # Обработка вопросов с выбором ответов
+            for question in checkbox_questions:
+                tag_name = "Без тэга"
+                if question.tag_id and question.tag_id in tags_dict:
+                    tag_name = tags_dict[question.tag_id].name
+                self.unique_tag[tag_name] = (
+                    self.unique_tag.get(tag_name, 0) + 1
+                )
+
+                # Загрузка правильных и неправильных ответов
+                correct_answers = session.scalars(
+                    select(AnswersCheckBoxOrm.text).where(
+                        AnswersCheckBoxOrm.question_id == question.id,
+                        AnswersCheckBoxOrm.is_correct == True,
+                    )
+                ).all()
+
+                wrong_answers = session.scalars(
+                    select(AnswersCheckBoxOrm.text).where(
+                        AnswersCheckBoxOrm.question_id == question.id,
+                        AnswersCheckBoxOrm.is_correct == False,
+                    )
+                ).all()
+
+                self.questions.append(
+                    (
+                        question.question,
+                        "Выбор правильн(ого/ых) ответов",
+                        [list(correct_answers), list(wrong_answers)],
+                        tag_name if tag_name != "Без тэга" else None,
+                    )
+                )
+                item_text = f"{tag_name} — {question.question[:50]}..."
+                self.question_list.addItem(item_text)
+
+            # Обработка вопросов с упорядочиванием
+            for question in replacement_questions:
+                tag_name = "Без тэга"
+                if question.tag_id and question.tag_id in tags_dict:
+                    tag_name = tags_dict[question.tag_id].name
+                self.unique_tag[tag_name] = (
+                    self.unique_tag.get(tag_name, 0) + 1
+                )
+
+                # Загрузка ответов в правильном порядке
+                answers = session.scalars(
+                    select(AnswersReplacementOrm.text)
+                    .where(AnswersReplacementOrm.question_id == question.id)
+                    .order_by(AnswersReplacementOrm.number_in_answer)
+                ).all()
+
+                self.questions.append(
+                    (
+                        question.question,
+                        "Упорядочивание",
+                        list(answers),
+                        tag_name if tag_name != "Без тэга" else None,
+                    )
+                )
+                item_text = f"{tag_name} — {question.question[:50]}..."
+                self.question_list.addItem(item_text)
 
     # Возвращение в главное меню
     def comeback_startmenu(self):
