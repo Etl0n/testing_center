@@ -1,22 +1,31 @@
 import asyncio
 import base64
+import hashlib
 import os
 import re
+import secrets
+import string
 import sys
 from random import sample
 
+import pandas as pd
 from database import async_engine, sync_engine
 from models import (
     AnswersCheckBoxOrm,
     AnswersReplacementOrm,
     Base,
+    GroupsOrm,
     QuestionsCheckBoxOrm,
     QuestionsInputStringOrm,
     QuestionsReplacementOrm,
+    StudentsOrm,
     TagsOrm,
+    TeachersOrm,
     TestsOrm,
 )
+from openpyxl import Workbook
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QFont, QImage, QTextCharFormat
 from PyQt5.QtWidgets import QFileDialog
 from qasync import QEventLoop
@@ -31,7 +40,7 @@ os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(
 )
 
 session_async_factory = async_sessionmaker(async_engine)
-session_sync_factory = sessionmaker(sync_engine)
+session_sync_factory = sessionmaker(bind=sync_engine, expire_on_commit=False)
 
 fmt = QtGui.QTextTableFormat()
 fmt.setBorder(1)  # Толщина внешней рамки
@@ -332,10 +341,110 @@ class TagInfoDialog(QtWidgets.QDialog):
         return {tag: spin.value() for tag, spin in self.tag_widgets.items()}
 
 
+class LoginWindow(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Авторизация")
+        self.resize(400, 300)
+
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        # Заголовок
+        title = QtWidgets.QLabel("Центр тестирования")
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        title.setStyleSheet("font-size: 18pt; font-weight: bold;")
+        layout.addWidget(title)
+
+        # Поля ввода
+        form_layout = QtWidgets.QFormLayout()
+
+        self.login_edit = QtWidgets.QLineEdit()
+        self.login_edit.setPlaceholderText("Введите логин")
+
+        self.password_edit = QtWidgets.QLineEdit()
+        self.password_edit.setPlaceholderText("Введите пароль")
+        self.password_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+
+        form_layout.addRow("Логин:", self.login_edit)
+        form_layout.addRow("Пароль:", self.password_edit)
+
+        layout.addLayout(form_layout)
+
+        # Кнопка входа
+        self.login_btn = QtWidgets.QPushButton("Войти")
+        self.login_btn.clicked.connect(self.authenticate)
+        layout.addWidget(self.login_btn)
+
+        # Статус
+        self.status_label = QtWidgets.QLabel("")
+        self.status_label.setStyleSheet("color: red;")
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+    def create_default_teacher(self):
+        """Создает учителя по умолчанию если его нет"""
+        with session_sync_factory() as session:
+            existing_teacher = session.scalar(
+                select(TeachersOrm).where(TeachersOrm.login == "teacher_admin")
+            )
+            if not existing_teacher:
+                teacher = TeachersOrm(
+                    login="teacher_admin",
+                    password="123",  # В реальном приложении нужно хэшировать!
+                )
+                session.add(teacher)
+                session.commit()
+
+    def authenticate(self):
+        login = self.login_edit.text().strip()
+        password = self.password_edit.text().strip()
+
+        if not login or not password:
+            self.show_status("Введите логин и пароль")
+            return
+
+        with session_sync_factory() as session:
+            # Проверяем учителя
+            teacher = session.scalar(
+                select(TeachersOrm).where(TeachersOrm.login == login)
+            )
+            if teacher and teacher.password == password:
+                self.open_start_window(is_teacher=True)
+                return
+
+            # Проверяем студента
+            student = session.scalar(
+                select(StudentsOrm).where(StudentsOrm.login == login)
+            )
+            if student and student.password == password:
+                self.open_start_window(is_teacher=False, student_id=student.id)
+                return
+
+        self.show_status("Неверный логин или пароль")
+
+    def show_status(self, message):
+        self.status_label.setText(message)
+        QTimer.singleShot(3000, lambda: self.status_label.setText(""))
+
+    def open_start_window(self, is_teacher=False, student_id=None):
+        self.start_window = StartWindow(
+            is_teacher=is_teacher, student_id=student_id
+        )
+        self.start_window.show()
+        self.close()
+
+
 # Стартовое окно
 class StartWindow(QtWidgets.QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, is_teacher=False, student_id=None, parent=None):
         super().__init__(parent)
+        self.is_teacher = is_teacher
+        self.student_id = student_id
+
         self.setWindowTitle("Центр тестирования")
         self.resize(800, 600)
         self.setMinimumSize(600, 400)
@@ -343,40 +452,63 @@ class StartWindow(QtWidgets.QWidget):
         self.init_ui()
 
     def init_ui(self):
-        # Основной макет
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(40, 40, 40, 40)
         main_layout.setSpacing(30)
 
-        # Заголовок
-        self.label = QtWidgets.QLabel("Добро пожаловать в Центр тестирования")
+        # Заголовок с информацией о пользователе
+        user_type = "Преподаватель" if self.is_teacher else "Студент"
+        self.label = QtWidgets.QLabel(f"Добро пожаловать, {user_type}!")
         self.label.setAlignment(QtCore.Qt.AlignCenter)
+        main_layout.addWidget(self.label)
 
         # Список тестов
         self.test_list = QtWidgets.QListWidget()
         self.test_list.itemDoubleClicked.connect(self.confirm_test_selection)
-
-        # Кнопка создания теста
-        self.btn_create_test = QtWidgets.QPushButton("Создать новый тест")
-        self.btn_create_test.clicked.connect(self.open_create_test_window)
-
-        # Кнопка редактирования теста
-        self.btn_edit_test = QtWidgets.QPushButton("Редактировать тест")
-        self.btn_edit_test.clicked.connect(self.open_edit_test_window)
-
-        # Горизонтальный макет для кнопок
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.addWidget(self.btn_create_test)
-        button_layout.addWidget(self.btn_edit_test)
-
-        # Добавление виджетов
-        main_layout.addWidget(self.label)
         main_layout.addWidget(QtWidgets.QLabel("Доступные тесты:"))
         main_layout.addWidget(self.test_list)
-        main_layout.addLayout(button_layout)
 
-        # Загрузка тестов
+        # Кнопки для преподавателя
+        if self.is_teacher:
+            teacher_layout = QtWidgets.QHBoxLayout()
+
+            self.btn_create_test = QtWidgets.QPushButton("Создать новый тест")
+            self.btn_create_test.clicked.connect(self.open_create_test_window)
+
+            self.btn_edit_test = QtWidgets.QPushButton("Редактировать тест")
+            self.btn_edit_test.clicked.connect(self.open_edit_test_window)
+
+            self.btn_manage_students = QtWidgets.QPushButton(
+                "Управление студентами"
+            )
+            self.btn_manage_students.clicked.connect(
+                self.open_student_management
+            )
+
+            teacher_layout.addWidget(self.btn_create_test)
+            teacher_layout.addWidget(self.btn_edit_test)
+            teacher_layout.addWidget(self.btn_manage_students)
+
+            main_layout.addLayout(teacher_layout)
+
+        # Кнопка выхода
+        self.btn_logout = QtWidgets.QPushButton("Выйти")
+        self.btn_logout.clicked.connect(self.logout)
+        main_layout.addWidget(self.btn_logout)
+
         self.load_tests()
+
+    def open_student_management(self):
+        """Открывает окно управления студентами"""
+        self.student_window = StudentManagementWindow()
+        self.student_window.show()
+        self.close()
+
+    def logout(self):
+        """Возврат к окну авторизации"""
+        self.login_window = LoginWindow()
+        self.login_window.show()
+        self.close()
 
     def load_tests(self):
         self.test_list.clear()
@@ -472,6 +604,294 @@ class StartWindow(QtWidgets.QWidget):
             test_id=test_id, test_name=test_name
         )
         self.question_window.show()
+        self.close()
+
+
+class StudentManagementWindow(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Управление студентами")
+        self.resize(800, 600)
+
+        self.init_ui()
+        self.load_groups()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        # Заголовок
+        title = QtWidgets.QLabel("Управление студентами")
+        title.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        layout.addWidget(title)
+
+        # Импорт из Excel
+        import_layout = QtWidgets.QHBoxLayout()
+        self.import_btn = QtWidgets.QPushButton("Импорт из Excel")
+        self.import_btn.clicked.connect(self.import_from_excel)
+        import_layout.addWidget(self.import_btn)
+        import_layout.addStretch()
+        layout.addLayout(import_layout)
+
+        # Экспорт логинов/паролей
+        export_layout = QtWidgets.QHBoxLayout()
+        self.export_btn = QtWidgets.QPushButton("Экспорт логинов/паролей")
+        self.export_btn.clicked.connect(self.export_credentials)
+        export_layout.addWidget(self.export_btn)
+
+        self.export_group_selector = QtWidgets.QComboBox()
+        self.export_group_selector.currentIndexChanged.connect(
+            self.preview_group_students
+        )
+        export_layout.addWidget(QtWidgets.QLabel("Группа:"))
+        export_layout.addWidget(self.export_group_selector)
+
+        export_layout.addStretch()
+        layout.addLayout(export_layout)
+
+        # Таблица студентов (универсальная)
+        self.students_table = QtWidgets.QTableWidget()
+        self.students_table.setColumnCount(4)
+        self.students_table.setHorizontalHeaderLabels(
+            ["Логин", "Пароль", "ФИО", "Группа"]
+        )
+        layout.addWidget(self.students_table)
+
+        # Кнопка возврата
+        self.back_btn = QtWidgets.QPushButton("Назад")
+        self.back_btn.clicked.connect(self.go_back)
+        layout.addWidget(self.back_btn)
+
+        self.setLayout(layout)
+
+    def load_groups(self):
+        """Загрузка списка групп"""
+        self.export_group_selector.clear()
+
+        with session_sync_factory() as session:
+            groups = session.scalars(select(GroupsOrm)).all()
+            for group in groups:
+                self.export_group_selector.addItem(group.name, group.id)
+
+    def generate_credentials(self):
+        """Генерация логина и пароля из 8 случайных символов"""
+        chars = string.ascii_letters + string.digits
+        login = ''.join(secrets.choice(chars) for _ in range(8))
+        password = ''.join(secrets.choice(chars) for _ in range(8))
+        return login, password
+
+    def import_from_excel(self):
+        """Импорт студентов из Excel файла (с определением группы из файла)"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите файл Excel", "", "Excel Files (*.xlsx *.xls)"
+        )
+
+        if not file_path:
+            return
+
+        try:
+            df = pd.read_excel(file_path)
+            required_columns = ['ФИО', 'Группа']
+
+            if not all(col in df.columns for col in required_columns):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Ошибка",
+                    f"Файл должен содержать колонки: {', '.join(required_columns)}",
+                )
+                return
+
+            added_students = []  # для предпросмотра
+            last_group_name = None
+
+            with session_sync_factory() as session:
+                for _, row in df.iterrows():
+                    full_name = str(row['ФИО']).strip()
+                    group_name = str(row['Группа']).strip()
+
+                    if not full_name or not group_name:
+                        continue
+
+                    last_group_name = group_name  # запомним последнюю группу
+
+                    # Находим или создаем группу
+                    group = session.scalar(
+                        select(GroupsOrm).where(GroupsOrm.name == group_name)
+                    )
+                    if not group:
+                        group = GroupsOrm(name=group_name)
+                        session.add(group)
+                        session.flush()
+
+                    # Генерируем уникальный логин
+                    while True:
+                        login, password = self.generate_credentials()
+                        existing = session.scalar(
+                            select(StudentsOrm).where(
+                                StudentsOrm.login == login
+                            )
+                        )
+                        if not existing:
+                            break
+
+                    student = StudentsOrm(
+                        login=login,
+                        password=password,
+                        full_name=full_name,
+                        group_id=group.id,
+                    )
+                    session.add(student)
+                    added_students.append(
+                        {
+                            "login": login,
+                            "password": password,
+                            "full_name": full_name,
+                            "group_name": group.name,
+                        }
+                    )
+
+                session.commit()
+
+            # Обновляем список групп
+            self.load_groups()
+
+            # Если мы знаем последнюю группу из импорта → выбираем её в ComboBox
+            if last_group_name:
+                index = self.export_group_selector.findText(last_group_name)
+                if index != -1:
+                    self.export_group_selector.setCurrentIndex(index)
+                    # Сразу вызываем предпросмотр
+                    self.preview_group_students()
+
+            # Предпросмотр только добавленных
+            self.show_students_in_table(added_students, from_preview=True)
+
+            QtWidgets.QMessageBox.information(
+                self, "Успех", f"Добавлено {len(added_students)} студентов"
+            )
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Ошибка", f"Ошибка импорта: {str(e)}"
+            )
+
+    def export_credentials(self):
+        """Экспорт логинов и паролей в Excel"""
+        group_id = self.export_group_selector.currentData()
+        if not group_id:
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Выберите группу")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить как",
+            f"логины_пароли_{self.export_group_selector.currentText()}.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+
+        if not file_path:
+            return
+
+        try:
+            with session_sync_factory() as session:
+                students = session.scalars(
+                    select(StudentsOrm).options(
+                        selectinload(StudentsOrm.group)
+                    )
+                ).all()
+
+                if not students:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Ошибка", "В группе нет студентов"
+                    )
+                    return
+
+                # Создаем Excel файл
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Логины и пароли"
+
+                # Заголовки
+                ws.append(['Логин', 'Пароль', 'ФИО', 'Группа'])
+
+                # Данные
+                for student in students:
+                    ws.append(
+                        [
+                            student.login,
+                            student.password,
+                            student.full_name,
+                            student.group.name,
+                        ]
+                    )
+
+                wb.save(file_path)
+                QtWidgets.QMessageBox.information(
+                    self, "Успех", f"Данные экспортированы в {file_path}"
+                )
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Ошибка", f"Ошибка экспорта: {str(e)}"
+            )
+
+    def preview_group_students(self):
+        """Предпросмотр студентов выбранной группы"""
+        group_id = self.export_group_selector.currentData()
+        if not group_id:
+            self.students_table.setRowCount(0)
+            return
+
+        with session_sync_factory() as session:
+            students = session.scalars(
+                select(StudentsOrm)
+                .where(StudentsOrm.group_id == group_id)
+                .options(selectinload(StudentsOrm.group))
+            ).all()
+
+        self.show_students_in_table(students)
+
+    def show_students_in_table(self, students, from_preview=False):
+        """Вывод студентов в таблицу"""
+        self.students_table.setRowCount(0)
+
+        for row, student in enumerate(students):
+            self.students_table.insertRow(row)
+
+            if from_preview:  # данные пришли как словарь
+                self.students_table.setItem(
+                    row, 0, QtWidgets.QTableWidgetItem(student["login"])
+                )
+                self.students_table.setItem(
+                    row, 1, QtWidgets.QTableWidgetItem(student["password"])
+                )
+                self.students_table.setItem(
+                    row, 2, QtWidgets.QTableWidgetItem(student["full_name"])
+                )
+                self.students_table.setItem(
+                    row, 3, QtWidgets.QTableWidgetItem(student["group_name"])
+                )
+            else:  # данные пришли как ORM-объект
+                self.students_table.setItem(
+                    row, 0, QtWidgets.QTableWidgetItem(student.login)
+                )
+                self.students_table.setItem(
+                    row, 1, QtWidgets.QTableWidgetItem(student.password)
+                )
+                self.students_table.setItem(
+                    row, 2, QtWidgets.QTableWidgetItem(student.full_name)
+                )
+                self.students_table.setItem(
+                    row,
+                    3,
+                    QtWidgets.QTableWidgetItem(
+                        student.group.name if student.group else ""
+                    ),
+                )
+
+    def go_back(self):
+        """Возврат в главное меню"""
+        self.start_window = StartWindow(is_teacher=True)
+        self.start_window.show()
         self.close()
 
 
@@ -1737,7 +2157,8 @@ async def first_work_database(window):
     print("Добавление данных в таблицы")
     await insert_data_database()
     print("Работа с БД закончилась")
-    window.load_tests()
+
+    window.create_default_teacher()
 
 
 async def main():
@@ -1745,7 +2166,7 @@ async def main():
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    window = StartWindow()
+    window = LoginWindow()
     window.show()
 
     # Запускаем асинхронную задачу по работе с БД

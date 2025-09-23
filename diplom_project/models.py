@@ -17,6 +17,39 @@ class Base(DeclarativeBase):
     pass
 
 
+class GroupsOrm(Base):
+    __tablename__ = "Groups"
+
+    id: Mapped[idpk]
+    name: Mapped[str] = mapped_column(unique=True, nullable=False)
+
+    students: Mapped[list["StudentsOrm"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+
+
+# ---- Студенты ----
+class StudentsOrm(Base):
+    __tablename__ = "Students"
+
+    id: Mapped[idpk]
+    login: Mapped[str] = mapped_column(unique=True, nullable=False)
+    password: Mapped[str] = mapped_column(nullable=False)
+    full_name: Mapped[str]
+    group_id: Mapped[int] = mapped_column(ForeignKey("Groups.id"))
+
+    group: Mapped["GroupsOrm"] = relationship(back_populates="students")
+
+
+# ---- Преподаватели ----
+class TeachersOrm(Base):
+    __tablename__ = "Teachers"
+
+    id: Mapped[idpk]
+    login: Mapped[str] = mapped_column(unique=True, nullable=False)
+    password: Mapped[str] = mapped_column(nullable=False)
+
+
 # ---- Базовый класс для всех вопросов ----
 class QuestionBase(Base):
     __abstract__ = True  # таблица для него не создаётся
