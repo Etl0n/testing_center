@@ -345,7 +345,7 @@ class LoginWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Авторизация")
-        self.resize(400, 300)
+        self.resize(250, 100)
 
         self.init_ui()
 
@@ -357,6 +357,11 @@ class LoginWindow(QtWidgets.QWidget):
         title.setAlignment(QtCore.Qt.AlignCenter)
         title.setStyleSheet("font-size: 18pt; font-weight: bold;")
         layout.addWidget(title)
+
+        # Статус
+        self.status_label = QtWidgets.QLabel("")
+        self.status_label.setStyleSheet("color: red;")
+        layout.addWidget(self.status_label)
 
         # Поля ввода
         form_layout = QtWidgets.QFormLayout()
@@ -377,11 +382,6 @@ class LoginWindow(QtWidgets.QWidget):
         self.login_btn = QtWidgets.QPushButton("Войти")
         self.login_btn.clicked.connect(self.authenticate)
         layout.addWidget(self.login_btn)
-
-        # Статус
-        self.status_label = QtWidgets.QLabel("")
-        self.status_label.setStyleSheet("color: red;")
-        layout.addWidget(self.status_label)
 
         self.setLayout(layout)
 
@@ -793,15 +793,18 @@ class StudentManagementWindow(QtWidgets.QWidget):
 
         try:
             with session_sync_factory() as session:
+                # ИСПРАВЛЕНИЕ: добавляем фильтр по группе
                 students = session.scalars(
-                    select(StudentsOrm).options(
-                        selectinload(StudentsOrm.group)
-                    )
+                    select(StudentsOrm)
+                    .where(
+                        StudentsOrm.group_id == group_id
+                    )  # Фильтруем по выбранной группе
+                    .options(selectinload(StudentsOrm.group))
                 ).all()
 
                 if not students:
                     QtWidgets.QMessageBox.warning(
-                        self, "Ошибка", "В группе нет студентов"
+                        self, "Ошибка", "В выбранной группе нет студентов"
                     )
                     return
 
@@ -835,58 +838,55 @@ class StudentManagementWindow(QtWidgets.QWidget):
             )
 
     def preview_group_students(self):
-        """Предпросмотр студентов выбранной группы"""
+        """Предпросмотр студентов выбранной группы в таблице"""
         group_id = self.export_group_selector.currentData()
         if not group_id:
-            self.students_table.setRowCount(0)
             return
 
-        with session_sync_factory() as session:
-            students = session.scalars(
-                select(StudentsOrm)
-                .where(StudentsOrm.group_id == group_id)
-                .options(selectinload(StudentsOrm.group))
-            ).all()
+        try:
+            with session_sync_factory() as session:
+                students = session.scalars(
+                    select(StudentsOrm)
+                    .where(StudentsOrm.group_id == group_id)
+                    .options(selectinload(StudentsOrm.group))
+                ).all()
 
-        self.show_students_in_table(students)
+                students_data = []
+                for student in students:
+                    students_data.append(
+                        {
+                            "login": student.login,
+                            "password": student.password,
+                            "full_name": student.full_name,
+                            "group_name": student.group.name,
+                        }
+                    )
 
-    def show_students_in_table(self, students, from_preview=False):
-        """Вывод студентов в таблицу"""
-        self.students_table.setRowCount(0)
+                self.show_students_in_table(students_data, from_preview=True)
 
-        for row, student in enumerate(students):
-            self.students_table.insertRow(row)
+        except Exception as e:
+            print(f"Ошибка загрузки студентов: {e}")
 
-            if from_preview:  # данные пришли как словарь
-                self.students_table.setItem(
-                    row, 0, QtWidgets.QTableWidgetItem(student["login"])
-                )
-                self.students_table.setItem(
-                    row, 1, QtWidgets.QTableWidgetItem(student["password"])
-                )
-                self.students_table.setItem(
-                    row, 2, QtWidgets.QTableWidgetItem(student["full_name"])
-                )
-                self.students_table.setItem(
-                    row, 3, QtWidgets.QTableWidgetItem(student["group_name"])
-                )
-            else:  # данные пришли как ORM-объект
-                self.students_table.setItem(
-                    row, 0, QtWidgets.QTableWidgetItem(student.login)
-                )
-                self.students_table.setItem(
-                    row, 1, QtWidgets.QTableWidgetItem(student.password)
-                )
-                self.students_table.setItem(
-                    row, 2, QtWidgets.QTableWidgetItem(student.full_name)
-                )
-                self.students_table.setItem(
-                    row,
-                    3,
-                    QtWidgets.QTableWidgetItem(
-                        student.group.name if student.group else ""
-                    ),
-                )
+    def show_students_in_table(self, students_data, from_preview=False):
+        """Отображение студентов в таблице"""
+        self.students_table.setRowCount(len(students_data))
+
+        for row, student in enumerate(students_data):
+            self.students_table.setItem(
+                row, 0, QtWidgets.QTableWidgetItem(student["login"])
+            )
+            self.students_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(student["password"])
+            )
+            self.students_table.setItem(
+                row, 2, QtWidgets.QTableWidgetItem(student["full_name"])
+            )
+            self.students_table.setItem(
+                row, 3, QtWidgets.QTableWidgetItem(student["group_name"])
+            )
+
+        # Автоподбор ширины колонок
+        self.students_table.resizeColumnsToContents()
 
     def go_back(self):
         """Возврат в главное меню"""
