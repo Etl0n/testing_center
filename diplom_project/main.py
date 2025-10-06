@@ -1649,7 +1649,8 @@ class QuestionEditor(QtWidgets.QWidget):
 
     # Возвращение в главное меню
     def comeback_startmenu(self):
-        self.window = StartWindow()
+        # Получаем родительское окно (StartWindow) чтобы узнать тип пользователя
+        self.window = StartWindow(is_teacher=True)
         self.window.load_tests()
         self.window.show()
         self.close()
@@ -2109,45 +2110,77 @@ async def insert_data_database():
             "Определяют координаты точки максимума функции и вычисляют значение целевой функции"
             "в этой точке",
         ]
+
+        # Создаем тест
+        test = TestsOrm(
+            name_test="Первый тест",
+            teacher="Поляков",
+        )
+        session.add(test)
+        await session.flush()  # Получаем test.id
+
+        # Создаем теги и связываем их с тестом
+        tag1 = TagsOrm(name="Статистика", count=2, test_id=test.id)
+        tag2 = TagsOrm(
+            name="Линейное программирование", count=1, test_id=test.id
+        )
+        session.add_all([tag1, tag2])
+        await session.flush()  # Получаем tag.id
+
+        # Создаем вопросы и связываем их с тегами
         question1 = QuestionsCheckBoxOrm(
             question="Выбрать все правильные варинат ответа\n"
             "Оценка параметра рассположения должна быть ______",
-            answers=[
-                AnswersCheckBoxOrm(
-                    text=ans["text"], is_correct=ans["is_corrected"]
-                )
-                for ans in answers1
-            ],
+            test_id=test.id,
+            tag_id=tag1.id,  # Связываем вопрос с тегом через tag_id
         )
+        session.add(question1)
+        await session.flush()  # Получаем question1.id
+
+        # Добавляем ответы для question1
+        for ans in answers1:
+            answer = AnswersCheckBoxOrm(
+                text=ans["text"],
+                is_correct=ans["is_corrected"],
+                question_id=question1.id,
+            )
+            session.add(answer)
+
         question2 = QuestionsCheckBoxOrm(
             question="Выбрать правильный вариант ответа.\n"
             "Для оценки параметра распределения случайной величины"
             "используют доверительные интервалы, если",
-            answers=[
-                AnswersCheckBoxOrm(
-                    text=ans["text"], is_correct=ans["is_corrected"]
-                )
-                for ans in answers2
-            ],
+            test_id=test.id,
+            tag_id=tag1.id,  # Связываем вопрос с тегом через tag_id
         )
+        session.add(question2)
+        await session.flush()  # Получаем question2.id
+
+        # Добавляем ответы для question2
+        for ans in answers2:
+            answer = AnswersCheckBoxOrm(
+                text=ans["text"],
+                is_correct=ans["is_corrected"],
+                question_id=question2.id,
+            )
+            session.add(answer)
+
         question3 = QuestionsReplacementOrm(
             question="Последовательность решения задачи линейного "
             "программирования на основе ее геометрической интерпретации",
-            answers=[
-                AnswersReplacementOrm(
-                    text=ans, number_in_answer=answers3.index(ans) + 1
-                )
-                for ans in answers3
-            ],
+            test_id=test.id,
+            tag_id=tag2.id,  # Связываем вопрос с тегом через tag_id
         )
-        test = TestsOrm(
-            name_test="Первый тест",
-            teacher="Поляков",
-            questions_check_box=[question1, question2],
-            questions_replacement=[question3],
-        )
-        session.add(test)
-        await session.flush()
+        session.add(question3)
+        await session.flush()  # Получаем question3.id
+
+        # Добавляем ответы для question3
+        for i, ans in enumerate(answers3, 1):
+            answer = AnswersReplacementOrm(
+                text=ans, number_in_answer=i, question_id=question3.id
+            )
+            session.add(answer)
+
         await session.commit()
 
 
