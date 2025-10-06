@@ -1794,12 +1794,23 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
 
         # Правая часть
         self.right_layout = QtWidgets.QVBoxLayout()
-        self.label_question = QtWidgets.QLabel()
-        self.label_question.setAlignment(
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop
+
+        self.question_text_browser = QtWidgets.QTextBrowser()
+        self.question_text_browser.setOpenExternalLinks(False)
+        self.question_text_browser.setStyleSheet(
+            """
+            QTextBrowser {
+                font-family: Arial, sans-serif;
+                font-size: 12pt;
+                line-height: 1.4;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                background-color: white;
+            }
+        """
         )
-        self.label_question.setWordWrap(True)
-        self.right_layout.addWidget(self.label_question, stretch=1)
+        self.right_layout.addWidget(self.question_text_browser, stretch=1)
 
         self.answer = QtWidgets.QVBoxLayout()
         self.right_layout.addLayout(self.answer)
@@ -1932,8 +1943,8 @@ class QuestionWindow(QtWidgets.QFrame, QuestionReplacementMixin):
         # статус текущей кнопки → выбран
         self.question_grid.set_button_status(index, "Выбран")
 
-        # текст вопроса
-        self.label_question.setText(self.current_question["question"])
+        # Устанавливаем HTML в QTextBrowser
+        self.question_text_browser.setHtml(self.current_question["question"])
 
         # очистка и добавление новых ответов
         clear_layout(self.answer)
