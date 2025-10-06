@@ -26,7 +26,7 @@ class Settings(BaseSettings):
             f"{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
 
-    model_config = SettingsConfigDict(env_file="testing_center/.env")
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()
