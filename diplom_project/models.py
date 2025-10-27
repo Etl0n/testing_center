@@ -18,7 +18,7 @@ class Base(DeclarativeBase):
 
 
 class GroupsOrm(Base):
-    __tablename__ = "Groups"
+    __tablename__ = "groups"
 
     id: Mapped[idpk]
     name: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -30,20 +30,20 @@ class GroupsOrm(Base):
 
 # ---- Студенты ----
 class StudentsOrm(Base):
-    __tablename__ = "Students"
+    __tablename__ = "students"
 
     id: Mapped[idpk]
     login: Mapped[str] = mapped_column(unique=True, nullable=False)
     password: Mapped[str] = mapped_column(nullable=False)
     full_name: Mapped[str]
-    group_id: Mapped[int] = mapped_column(ForeignKey("Groups.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
 
     group: Mapped["GroupsOrm"] = relationship(back_populates="students")
 
 
 # ---- Преподаватели ----
 class TeachersOrm(Base):
-    __tablename__ = "Teachers"
+    __tablename__ = "teachers"
 
     id: Mapped[idpk]
     login: Mapped[str] = mapped_column(unique=True, nullable=False)
@@ -60,26 +60,26 @@ class QuestionBase(Base):
     @declared_attr
     def tag_id(cls) -> Mapped[Optional[int]]:
         return mapped_column(
-            ForeignKey("Tags.id", ondelete="SET NULL"), nullable=True
+            ForeignKey("tags.id", ondelete="SET NULL"), nullable=True
         )
 
     @declared_attr
     def test_id(cls) -> Mapped[int]:
         return mapped_column(
-            ForeignKey("Tests.id", ondelete="CASCADE"), nullable=False
+            ForeignKey("tests.id", ondelete="CASCADE"), nullable=False
         )
 
 
 # ---- Тэги ----
 class TagsOrm(Base):
-    __tablename__ = "Tags"
+    __tablename__ = "tags"
 
     id: Mapped[idpk]
     name: Mapped[str]  # название тэга (например "Алгебра")
     count: Mapped[int] = mapped_column(default=0)  # сколько вопросов выбрать
 
     test_id: Mapped[int] = mapped_column(
-        ForeignKey("Tests.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("tests.id", ondelete="CASCADE"), nullable=False
     )
     test = relationship("TestsOrm", back_populates="tags")
 
@@ -97,7 +97,7 @@ class TagsOrm(Base):
 
 # ---- Тесты ----
 class TestsOrm(Base):
-    __tablename__ = "Tests"
+    __tablename__ = "tests"
 
     id: Mapped[idpk]
     name_test: Mapped[str] = mapped_column(unique=True)
@@ -120,7 +120,7 @@ class TestsOrm(Base):
 
 # ---- Вопросы с выбором ----
 class QuestionsCheckBoxOrm(QuestionBase):
-    __tablename__ = "QuestionsCheckBox"
+    __tablename__ = "questionscheckbox"
 
     answers = relationship("AnswersCheckBoxOrm", back_populates="question")
     test = relationship("TestsOrm", back_populates="questions_check_box")
@@ -128,21 +128,21 @@ class QuestionsCheckBoxOrm(QuestionBase):
 
 
 class AnswersCheckBoxOrm(Base):
-    __tablename__ = "AnswersCheckBox"
+    __tablename__ = "answerscheckbox"
 
     id: Mapped[idpk]
     text: Mapped[str]
     is_correct: Mapped[bool] = mapped_column(default=False)
 
     question_id: Mapped[int] = mapped_column(
-        ForeignKey("QuestionsCheckBox.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("questionscheckbox.id", ondelete="CASCADE"), nullable=False
     )
     question = relationship("QuestionsCheckBoxOrm", back_populates="answers")
 
 
 # ---- Вопросы на упорядочивание ----
 class QuestionsReplacementOrm(QuestionBase):
-    __tablename__ = "QuestionsReplacement"
+    __tablename__ = "questionsreplacement"
 
     answers = relationship("AnswersReplacementOrm", back_populates="question")
     test = relationship("TestsOrm", back_populates="questions_replacement")
@@ -150,14 +150,14 @@ class QuestionsReplacementOrm(QuestionBase):
 
 
 class AnswersReplacementOrm(Base):
-    __tablename__ = "AnswersReplacement"
+    __tablename__ = "answersreplacement"
 
     id: Mapped[idpk]
     text: Mapped[str]
     number_in_answer: Mapped[int]
 
     question_id: Mapped[int] = mapped_column(
-        ForeignKey("QuestionsReplacement.id", ondelete="CASCADE"),
+        ForeignKey("questionsreplacement.id", ondelete="CASCADE"),
         nullable=False,
     )
     question = relationship(
@@ -167,7 +167,7 @@ class AnswersReplacementOrm(Base):
 
 # ---- Вопросы с вводом строки ----
 class QuestionsInputStringOrm(QuestionBase):
-    __tablename__ = "QuestionsInputString"
+    __tablename__ = "questionsinputstring"
 
     answers: Mapped[str]
     test = relationship("TestsOrm", back_populates="questions_input_string")
